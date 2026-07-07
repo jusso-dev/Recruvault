@@ -1,0 +1,73 @@
+# Recruvault — single-tenant self-host build (government / sovereignty-
+# sensitive clients) and local development stack.
+#
+# Services: the app, PostgreSQL, ClamAV (clamd), and MinIO as an
+# S3-compatible object store for fully sovereign deployments. Point
+# S3_ENDPOINT at real AWS S3 (ap-southeast-2) for the SaaS tier.
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://recruvault:recruvault@db:5432/recruvault
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
+      LOCAL_KEK: ${LOCAL_KEK:-}
+      KMS_KEY_ID: ${KMS_KEY_ID:-}
+      AWS_REGION: ${AWS_REGION:-ap-southeast-2}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-recruvault}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-recruvault-secret}
+      S3_BUCKET: ${S3_BUCKET:-recruvault-documents}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_FORCE_PATH_STYLE: "true"
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SHARED_SENDING_DOMAIN: ${SHARED_SENDING_DOMAIN:-mail.recruvault.example}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      SMS_ENABLED: ${SMS_ENABLED:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+      clamav:
+        condition: service_started
+      minio:
+        condition: service_started
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: recruvault
+      POSTGRES_PASSWORD: recruvault
+      POSTGRES_DB: recruvault
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recruvault"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  clamav:
+    image: clamav/clamav:latest
+    volumes:
+      - clamav-data:/var/lib/clamav
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-recruvault}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-recruvault-secret}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+volumes:
+  db-data:
+  clamav-data:
+  minio-data:
