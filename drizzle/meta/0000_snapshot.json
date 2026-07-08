@@ -1,5 +1,5 @@
 {
-  "id": "5f270a2c-5b77-4d48-bf31-ba97ae98787a",
+  "id": "2746b7f7-8144-4450-9186-cd8598a434f1",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -972,13 +972,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "plan": {
-          "name": "plan",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'solo'"
         },
         "created_at": {
           "name": "created_at",

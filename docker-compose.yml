@@ -1,9 +1,8 @@
-# Recruvault — single-tenant self-host build (government / sovereignty-
-# sensitive clients) and local development stack.
+# Recruvault — self-host stack (also handy for local development).
 #
 # Services: the app, PostgreSQL, ClamAV (clamd), and MinIO as an
-# S3-compatible object store for fully sovereign deployments. Point
-# S3_ENDPOINT at real AWS S3 (ap-southeast-2) for the SaaS tier.
+# S3-compatible object store for fully self-contained deployments. Point
+# S3_ENDPOINT at real AWS S3 (ap-southeast-2) if you'd rather use AWS.
 services:
   app:
     build: .

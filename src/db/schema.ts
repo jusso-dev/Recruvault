@@ -195,7 +195,6 @@ export const organisations = pgTable("organisations", {
   // Days after submission before automatic purge. Enforced by the retention job.
   retentionDays: integer("retention_days").notNull().default(90),
   purgeOnClose: boolean("purge_on_close").notNull().default(false),
-  plan: text("plan").notNull().default("solo"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

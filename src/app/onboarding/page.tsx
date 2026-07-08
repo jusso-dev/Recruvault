@@ -27,7 +27,7 @@ export default async function OnboardingPage() {
           <h1 className="text-xl font-semibold">Create your organisation</h1>
           <p className="text-sm text-zinc-600">
             You&apos;ll be the owner: full control over users, roles, retention,
-            branding, and billing.
+            and branding.
           </p>
           <ActionForm action={createOrganisation} redirectTo="/dashboard" className="space-y-3">
             <div>

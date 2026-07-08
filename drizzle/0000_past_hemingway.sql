@@ -129,7 +129,6 @@ CREATE TABLE "organisations" (
 	"sending_domain_verified_at" timestamp,
 	"retention_days" integer DEFAULT 90 NOT NULL,
 	"purge_on_close" boolean DEFAULT false NOT NULL,
-	"plan" text DEFAULT 'solo' NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "organisations_slug_unique" UNIQUE("slug")
 );

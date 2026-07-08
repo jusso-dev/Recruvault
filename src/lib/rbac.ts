@@ -10,7 +10,6 @@
 export type OrgRole = "owner" | "admin" | "recruiter" | "reviewer" | "compliance";
 
 export const PERMISSIONS = [
-  "billing:manage",
   "org:manage",
   "users:manage",
   "branding:manage",
@@ -31,7 +30,6 @@ export type Permission = (typeof PERMISSIONS)[number];
 
 const ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
   owner: [
-    "billing:manage",
     "org:manage",
     "users:manage",
     "branding:manage",
