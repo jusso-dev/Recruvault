@@ -28,7 +28,7 @@ import { issueLinkSession, readLinkSession, clearLinkSession } from "@/lib/link-
 import { sendOtpEmail, sendSubmissionReceived } from "@/lib/email";
 import { audit } from "@/lib/audit";
 import { getSession, requestMeta } from "@/lib/guards";
-import { inngest } from "@/inngest/client";
+import { sendEvent } from "@/inngest/client";
 import { newStorageKey, putObjectBytes } from "@/lib/storage";
 import { sniffContentType } from "@/lib/scan";
 import { UPLOAD_ALLOWED_TYPES, UPLOAD_MAX_BYTES } from "@/lib/fields";
@@ -285,10 +285,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
         fieldId: f.id,
         documentId: doc.id,
       });
-      await inngest.send({
-        name: "document/uploaded",
-        data: { documentId: doc.id, table: "documents" },
-      });
+      await sendEvent("document/uploaded", { documentId: doc.id, table: "documents" });
     } else {
       const raw = String(formData.get(`field_${f.id}`) ?? "").trim();
       if (!raw) continue;
@@ -372,10 +369,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
     requestTitle: request.title,
     retentionDays: org.retentionDays,
   });
-  await inngest.send({
-    name: "submission/received",
-    data: { submissionId: submission.id },
-  });
+  await sendEvent("submission/received", { submissionId: submission.id });
 
   await clearLinkSession();
   return { ok: true, id: submission.id };

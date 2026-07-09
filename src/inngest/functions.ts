@@ -1,5 +1,5 @@
 import { and, eq, gt, isNull, lt } from "drizzle-orm";
-import { inngest } from "./client";
+import { inngest, parseEvent } from "./client";
 import { db } from "@/db";
 import {
   accessTokens,
@@ -34,12 +34,10 @@ const DEFAULT_LINK_TTL_DAYS = 14;
 export const deliverRequest = inngest.createFunction(
   { id: "deliver-request", retries: 3, triggers: [{ event: "request/send" }] },
   async ({ event, step }) => {
-    const { requestId, recipientEmail, recipientPhone, sentBy } = event.data as {
-      requestId: string;
-      recipientEmail: string;
-      recipientPhone?: string;
-      sentBy: string;
-    };
+    const { requestId, recipientEmail, recipientPhone, sentBy } = parseEvent(
+      "request/send",
+      event.data,
+    );
 
     const prepared = await step.run("create-token", async () => {
       const [req] = await db.select().from(requests).where(eq(requests.id, requestId));
@@ -153,10 +151,7 @@ export const deliverRequest = inngest.createFunction(
 export const scanDocument = inngest.createFunction(
   { id: "scan-document", retries: 2, triggers: [{ event: "document/uploaded" }] },
   async ({ event, step }) => {
-    const { documentId, table } = event.data as {
-      documentId: string;
-      table: "documents" | "wallet_documents";
-    };
+    const { documentId, table } = parseEvent("document/uploaded", event.data);
 
     const result = await step.run("scan", async () => {
       const tbl = table === "documents" ? documents : walletDocuments;
@@ -203,10 +198,11 @@ export const submissionReceived = inngest.createFunction(
   { id: "submission-received", retries: 3, triggers: [{ event: "submission/received" }] },
   async ({ event, step }) => {
     await step.run("notify-recruiter", async () => {
+      const { submissionId } = parseEvent("submission/received", event.data);
       const [sub] = await db
         .select()
         .from(submissions)
-        .where(eq(submissions.id, (event.data as { submissionId: string }).submissionId));
+        .where(eq(submissions.id, submissionId));
       if (!sub) return;
       const [req] = await db.select().from(requests).where(eq(requests.id, sub.requestId));
       if (!req) return;
@@ -288,11 +284,7 @@ export const emailEvents = inngest.createFunction(
   { id: "email-events", triggers: [{ event: "email/event" }] },
   async ({ event, step }) => {
     await step.run("handle", async () => {
-      const { type, email, messageId } = event.data as {
-        type: string;
-        email: string;
-        messageId?: string;
-      };
+      const { type, email, messageId } = parseEvent("email/event", event.data);
       if (type === "email.bounced" || type === "email.complained") {
         await db
           .insert(suppressions)

@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { inngest } from "@/inngest/client";
+import { sendEvent } from "@/inngest/client";
 
 /**
  * Resend webhook receiver (svix-signed). Bounce and complaint events flow
@@ -48,9 +48,10 @@ export async function POST(req: NextRequest) {
 
   const to = Array.isArray(body.data?.to) ? body.data?.to[0] : body.data?.to;
   if (to) {
-    await inngest.send({
-      name: "email/event",
-      data: { type: body.type, email: to, messageId: body.data?.email_id },
+    await sendEvent("email/event", {
+      type: body.type,
+      email: to,
+      messageId: body.data?.email_id,
     });
   }
 

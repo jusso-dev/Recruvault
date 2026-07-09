@@ -16,13 +16,9 @@ import {
 } from "@/db/schema";
 import { requireOrgUser, requestMeta } from "@/lib/guards";
 import { audit } from "@/lib/audit";
-import { inngest } from "@/inngest/client";
+import { sendEvent } from "@/inngest/client";
 import { newStorageKey, putObjectBytes } from "@/lib/storage";
-import {
-  fieldDefinition,
-  UPLOAD_ALLOWED_TYPES,
-  UPLOAD_MAX_BYTES,
-} from "@/lib/fields";
+import { fieldDefinition, UPLOAD_MAX_BYTES } from "@/lib/fields";
 import { sniffContentType } from "@/lib/scan";
 import type { ActionResult } from "./org";
 
@@ -82,10 +78,7 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
       })
       .returning({ id: documents.id });
     jdDocumentId = doc.id;
-    await inngest.send({
-      name: "document/uploaded",
-      data: { documentId: doc.id, table: "documents" },
-    });
+    await sendEvent("document/uploaded", { documentId: doc.id, table: "documents" });
   }
 
   const [request] = await db
@@ -189,9 +182,11 @@ export async function sendRequest(formData: FormData): Promise<ActionResult> {
     };
   }
 
-  await inngest.send({
-    name: "request/send",
-    data: { requestId, recipientEmail, recipientPhone, sentBy: ctx.userId },
+  await sendEvent("request/send", {
+    requestId,
+    recipientEmail,
+    recipientPhone,
+    sentBy: ctx.userId,
   });
 
   revalidatePath(`/dashboard/requests/${requestId}`);
