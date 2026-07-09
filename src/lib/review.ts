@@ -37,7 +37,12 @@ export interface SubmissionDocumentRef {
  * layer. Recruiters see their own/team requests; reviewers only submissions
  * explicitly shared with them; admins/owners/compliance see all (org-scoped).
  */
-export async function loadSubmissionForReview(ctx: OrgContext, submissionId: string) {
+/**
+ * Tenant + ownership/share gate for a single submission. Throws AuthError when
+ * the caller may not access it. Returns the submission and its request so
+ * callers (review render, status mutation) share one authorisation path.
+ */
+export async function assertSubmissionAccess(ctx: OrgContext, submissionId: string) {
   const [row] = await db
     .select({ submission: submissions, request: requests })
     .from(submissions)
@@ -56,6 +61,12 @@ export async function loadSubmissionForReview(ctx: OrgContext, submissionId: str
     const shared = await isSharedWith(submissionId, ctx.userId);
     if (!shared) throw new AuthError("This submission has not been shared with you.");
   }
+
+  return row;
+}
+
+export async function loadSubmissionForReview(ctx: OrgContext, submissionId: string) {
+  const row = await assertSubmissionAccess(ctx, submissionId);
 
   const fields = await db
     .select()

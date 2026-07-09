@@ -98,7 +98,7 @@ export const deliverRequest = inngest.createFunction(
     });
 
     await step.run("send-email", async () => {
-      await sendRequestInvite({
+      const messageId = await sendRequestInvite({
         to: recipientEmail,
         org: prepared.org,
         requestTitle: prepared.title,
@@ -107,8 +107,13 @@ export const deliverRequest = inngest.createFunction(
       });
       await db
         .update(deliveries)
-        .set({ status: "sent", updatedAt: new Date() })
-        .where(eq(deliveries.accessTokenId, prepared.accessTokenId));
+        .set({ status: "sent", providerMessageId: messageId, updatedAt: new Date() })
+        .where(
+          and(
+            eq(deliveries.accessTokenId, prepared.accessTokenId),
+            eq(deliveries.channel, "email"),
+          ),
+        );
     });
 
     if (recipientPhone) {
@@ -178,6 +183,9 @@ export const scanDocument = inngest.createFunction(
       if (verdict === "infected") await deleteObject(doc.storageKey);
 
       await audit({
+        // Org documents land on the org chain; wallet documents are candidate-
+        // side (global chain, orgId null).
+        orgId: table === "documents" ? (doc as { orgId: string }).orgId : null,
         actorType: "system",
         action: `document.scan.${verdict}`,
         targetType: table === "documents" ? "document" : "wallet_document",
@@ -280,16 +288,26 @@ export const emailEvents = inngest.createFunction(
   { id: "email-events", triggers: [{ event: "email/event" }] },
   async ({ event, step }) => {
     await step.run("handle", async () => {
-      const { type, email } = event.data as { type: string; email: string };
+      const { type, email, messageId } = event.data as {
+        type: string;
+        email: string;
+        messageId?: string;
+      };
       if (type === "email.bounced" || type === "email.complained") {
         await db
           .insert(suppressions)
           .values({ email: email.toLowerCase(), reason: type })
           .onConflictDoNothing();
+        // Mark only the delivery this event refers to. Fall back to recipient
+        // match when the provider gives us no message id.
         await db
           .update(deliveries)
           .set({ status: "bounced", updatedAt: new Date() })
-          .where(eq(deliveries.recipient, email.toLowerCase()));
+          .where(
+            messageId
+              ? eq(deliveries.providerMessageId, messageId)
+              : eq(deliveries.recipient, email.toLowerCase()),
+          );
       }
     });
   },

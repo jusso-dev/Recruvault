@@ -13,8 +13,10 @@ const COOKIE = "rv_link_session";
 const TTL_MS = 60 * 60 * 1000; // 1 hour
 
 function secret(): string {
-  const s = process.env.BETTER_AUTH_SECRET;
-  if (!s) throw new Error("BETTER_AUTH_SECRET is required.");
+  // Dedicated key isolates link-session signing from the auth library; falls
+  // back to BETTER_AUTH_SECRET so existing deployments keep working.
+  const s = process.env.LINK_SESSION_SECRET ?? process.env.BETTER_AUTH_SECRET;
+  if (!s) throw new Error("LINK_SESSION_SECRET or BETTER_AUTH_SECRET is required.");
   return s;
 }
 

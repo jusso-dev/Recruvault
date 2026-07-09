@@ -9,7 +9,9 @@ import { inngest } from "@/inngest/client";
 
 function verifySvix(req: NextRequest, payload: string): boolean {
   const secret = process.env.RESEND_WEBHOOK_SECRET;
-  if (!secret) return process.env.NODE_ENV !== "production";
+  // Fail closed: without a configured secret we cannot verify the signature,
+  // so reject rather than trust unsigned payloads (they mutate suppression).
+  if (!secret) return false;
 
   const id = req.headers.get("svix-id");
   const timestamp = req.headers.get("svix-timestamp");

@@ -21,10 +21,16 @@ services:
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_FORCE_PATH_STYLE: "true"
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
       SHARED_SENDING_DOMAIN: ${SHARED_SENDING_DOMAIN:-mail.recruvault.example}
       CLAMAV_HOST: clamav
       CLAMAV_PORT: "3310"
       SMS_ENABLED: ${SMS_ENABLED:-false}
+      # Background jobs. Default: talk to the bundled Inngest dev server.
+      # For Inngest Cloud, set INNGEST_DEV= (empty) plus the keys below.
+      INNGEST_DEV: ${INNGEST_DEV:-http://inngest:8288}
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:-}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -65,6 +71,18 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+
+  # Inngest dev server: runs the async jobs (delivery, scanning, expiry
+  # reminders, retention purge). For production, use Inngest Cloud instead
+  # and remove this service.
+  inngest:
+    image: inngest/inngest:latest
+    command: inngest dev -u http://app:3000/api/inngest --no-discovery
+    ports:
+      - "8288:8288"
+    depends_on:
+      app:
+        condition: service_started
 
 volumes:
   db-data:

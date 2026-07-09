@@ -334,6 +334,7 @@ export const requests = pgTable(
     ndaDocumentId: uuid("nda_document_id"),
     jdDocumentId: uuid("jd_document_id"),
     jdViewMode: jdViewMode("jd_view_mode").notNull().default("view_only"),
+    ndaViewMode: jdViewMode("nda_view_mode").notNull().default("view_only"),
     closedAt: timestamp("closed_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
@@ -482,6 +483,11 @@ export const accessTokens = pgTable(
     otpHash: text("otp_hash"),
     otpExpiresAt: timestamp("otp_expires_at"),
     otpAttempts: integer("otp_attempts").notNull().default(0),
+    // Resend throttling: bound how many fresh codes can be issued per window so
+    // resetting otpAttempts on resend cannot be abused to brute-force the code.
+    otpResends: integer("otp_resends").notNull().default(0),
+    otpWindowStart: timestamp("otp_window_start"),
+    otpLastSentAt: timestamp("otp_last_sent_at"),
     verifiedAt: timestamp("verified_at"),
     consumedAt: timestamp("consumed_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -588,6 +594,9 @@ export const auditEvents = pgTable(
     seq: integer("seq").notNull(),
     prevHash: text("prev_hash").notNull(),
     hash: text("hash").notNull(),
+    // The exact timestamp string mixed into `hash`. Persisted verbatim so the
+    // chain can be recomputed and content tampering detected after the fact.
+    hashedAt: text("hashed_at").notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [

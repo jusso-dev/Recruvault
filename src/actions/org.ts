@@ -80,11 +80,17 @@ export async function addMember(formData: FormData): Promise<ActionResult> {
     return { ok: false, error: "That account is a job seeker account, not an organisation user." };
   }
 
-  const [dup] = await db
-    .select()
+  // Single-org invariant: a user belongs to exactly one organisation. This
+  // keeps tenant resolution unambiguous (see requireOrgUser).
+  const [existingMembership] = await db
+    .select({ orgId: memberships.orgId })
     .from(memberships)
-    .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.userId, u.id)));
-  if (dup) return { ok: false, error: "Already a member." };
+    .where(eq(memberships.userId, u.id));
+  if (existingMembership) {
+    return existingMembership.orgId === ctx.orgId
+      ? { ok: false, error: "Already a member." }
+      : { ok: false, error: "That account already belongs to another organisation." };
+  }
 
   await db.insert(memberships).values({ orgId: ctx.orgId, userId: u.id, role });
 

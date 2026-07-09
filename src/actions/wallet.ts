@@ -237,7 +237,12 @@ export async function toggleSavedRole(formData: FormData): Promise<ActionResult>
   const ctx = await requireCandidate();
   const requestId = String(formData.get("requestId") ?? "");
 
-  const [request] = await db.select().from(requests).where(eq(requests.id, requestId));
+  // Only listed (seeker-discoverable) roles can be favourited; don't let an
+  // arbitrary request id confirm existence of an unlisted role.
+  const [request] = await db
+    .select()
+    .from(requests)
+    .where(and(eq(requests.id, requestId), eq(requests.listed, true)));
   if (!request) return { ok: false, error: "Role not found." };
 
   const [existing] = await db

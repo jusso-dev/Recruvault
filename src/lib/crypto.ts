@@ -4,6 +4,7 @@ import {
   createDecipheriv,
   createHash,
   randomBytes,
+  randomUUID,
   timingSafeEqual,
 } from "crypto";
 import { KMSClient, EncryptCommand, DecryptCommand } from "@aws-sdk/client-kms";
@@ -59,20 +60,37 @@ function aesDecrypt(key: Buffer, payload: string): Buffer {
   return Buffer.concat([decipher.update(Buffer.from(ctB64, "base64")), decipher.final()]);
 }
 
-async function wrapDek(dek: Buffer): Promise<{ wrapped: string; source: "kms" | "local" }> {
+// Bind each wrapped DEK to its registry id so a wrapped blob from one record
+// cannot be substituted into another — KMS decrypt fails if the context differs.
+function dekContext(dekId: string): Record<string, string> {
+  return { dekId };
+}
+
+async function wrapDek(
+  dek: Buffer,
+  dekId: string,
+): Promise<{ wrapped: string; source: "kms" | "local" }> {
   if (KMS_KEY_ID) {
     const out = await kmsClient().send(
-      new EncryptCommand({ KeyId: KMS_KEY_ID, Plaintext: dek }),
+      new EncryptCommand({
+        KeyId: KMS_KEY_ID,
+        Plaintext: dek,
+        EncryptionContext: dekContext(dekId),
+      }),
     );
     return { wrapped: Buffer.from(out.CiphertextBlob!).toString("base64"), source: "kms" };
   }
   return { wrapped: aesEncrypt(localKek(), dek), source: "local" };
 }
 
-async function unwrapDek(wrapped: string, source: string): Promise<Buffer> {
+async function unwrapDek(wrapped: string, source: string, dekId: string): Promise<Buffer> {
   if (source === "kms") {
     const out = await kmsClient().send(
-      new DecryptCommand({ CiphertextBlob: Buffer.from(wrapped, "base64") }),
+      new DecryptCommand({
+        CiphertextBlob: Buffer.from(wrapped, "base64"),
+        KeyId: KMS_KEY_ID,
+        EncryptionContext: dekContext(dekId),
+      }),
     );
     return Buffer.from(out.Plaintext!);
   }
@@ -82,12 +100,11 @@ async function unwrapDek(wrapped: string, source: string): Promise<Buffer> {
 /** Create and register a new DEK. Returns its registry id and raw key. */
 export async function createDataKey(): Promise<{ dekId: string; dek: Buffer }> {
   const dek = randomBytes(32);
-  const { wrapped, source } = await wrapDek(dek);
-  const [row] = await db
-    .insert(dataKeys)
-    .values({ wrappedKey: wrapped, keySource: source })
-    .returning({ id: dataKeys.id });
-  return { dekId: row.id, dek };
+  // Generate the id up front so it can bind the wrapped key via EncryptionContext.
+  const dekId = randomUUID();
+  const { wrapped, source } = await wrapDek(dek, dekId);
+  await db.insert(dataKeys).values({ id: dekId, wrappedKey: wrapped, keySource: source });
+  return { dekId, dek };
 }
 
 /** Fetch and unwrap a DEK. Throws if the key has been shredded. */
@@ -95,15 +112,19 @@ export async function getDataKey(dekId: string): Promise<Buffer> {
   const [row] = await db.select().from(dataKeys).where(eq(dataKeys.id, dekId));
   if (!row) throw new Error("Data key not found.");
   if (row.shreddedAt || !row.wrappedKey) throw new Error("Data key has been shredded.");
-  return unwrapDek(row.wrappedKey, row.keySource);
+  return unwrapDek(row.wrappedKey, row.keySource, dekId);
 }
+
+/** A db handle or an open transaction — lets callers shred atomically. */
+type Executor = Pick<typeof db, "update">;
 
 /**
  * Crypto-shred: destroy the wrapped key material so all ciphertext encrypted
- * under this DEK is permanently unrecoverable.
+ * under this DEK is permanently unrecoverable. Pass a transaction to shred and
+ * drop the ciphertext rows as one atomic unit.
  */
-export async function shredDataKey(dekId: string): Promise<void> {
-  await db
+export async function shredDataKey(dekId: string, executor: Executor = db): Promise<void> {
+  await executor
     .update(dataKeys)
     .set({ wrappedKey: null, shreddedAt: new Date() })
     .where(eq(dataKeys.id, dekId));

@@ -94,9 +94,13 @@ export async function GET(
           .select()
           .from(requests)
           .where(eq(requests.id, at.requestId));
-        if (request && (request.jdDocumentId === doc.id || request.ndaDocumentId === doc.id)) {
+        const isJd = request?.jdDocumentId === doc.id;
+        const isNda = request?.ndaDocumentId === doc.id;
+        if (request && (isJd || isNda)) {
           authorised = true;
-          allowDownload = request.jdViewMode === "allow_download";
+          // NDA and JD have independent view modes.
+          const viewMode = isNda ? request.ndaViewMode : request.jdViewMode;
+          allowDownload = viewMode === "allow_download";
           await audit({
             orgId: request.orgId,
             actorType: "link_responder",

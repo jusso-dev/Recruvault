@@ -45,7 +45,7 @@ export async function requireOrgUser(permission?: Permission): Promise<OrgContex
     throw new AuthError("Organisation account required.");
   }
 
-  const [m] = await db
+  const rows = await db
     .select({
       orgId: memberships.orgId,
       role: memberships.role,
@@ -54,10 +54,16 @@ export async function requireOrgUser(permission?: Permission): Promise<OrgContex
     })
     .from(memberships)
     .innerJoin(organisations, eq(organisations.id, memberships.orgId))
-    .where(eq(memberships.userId, session.user.id))
-    .limit(1);
+    .where(eq(memberships.userId, session.user.id));
 
-  if (!m) throw new AuthError("No organisation membership.");
+  if (rows.length === 0) throw new AuthError("No organisation membership.");
+  // Single-org invariant (enforced at membership creation). More than one
+  // membership is ambiguous with no active-org selector, so fail closed rather
+  // than silently resolve to an arbitrary tenant's data.
+  if (rows.length > 1) {
+    throw new AuthError("Account belongs to multiple organisations; contact support.");
+  }
+  const m = rows[0];
   if (permission && !can(m.role, permission)) {
     throw new AuthError(`Your role does not allow this action (${permission}).`);
   }

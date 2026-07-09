@@ -18,6 +18,7 @@ import {
   walletShares,
 } from "@/db/schema";
 import {
+  constantTimeEqualHex,
   createDataKey,
   encryptFieldWithKey,
   generateOtp,
@@ -35,6 +36,13 @@ import type { ActionResult } from "./org";
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 5;
+// Resend throttling. A fresh code resets the per-code attempt counter, so we
+// must also bound how many codes can be issued: at most OTP_MAX_RESENDS per
+// window, no more often than every OTP_MIN_RESEND_INTERVAL_MS. Caps total
+// guesses to ~OTP_MAX_RESENDS * OTP_MAX_ATTEMPTS against a 10^6 space.
+const OTP_RESEND_WINDOW_MS = 60 * 60 * 1000;
+const OTP_MAX_RESENDS = 5;
+const OTP_MIN_RESEND_INTERVAL_MS = 30 * 1000;
 
 async function loadToken(rawToken: string) {
   const tokenHash = sha256(rawToken);
@@ -67,13 +75,29 @@ export async function requestOtp(rawToken: string): Promise<ActionResult> {
   if (at.expiresAt < new Date()) return { ok: false, error: "This link has expired." };
   if (at.consumedAt) return { ok: false, error: "This request has already been completed." };
 
+  const now = new Date();
+  // Minimum interval between codes.
+  if (at.otpLastSentAt && now.getTime() - at.otpLastSentAt.getTime() < OTP_MIN_RESEND_INTERVAL_MS) {
+    return { ok: false, error: "Please wait a moment before requesting another code." };
+  }
+  // Rolling resend window.
+  const windowActive =
+    at.otpWindowStart && now.getTime() - at.otpWindowStart.getTime() < OTP_RESEND_WINDOW_MS;
+  const resends = windowActive ? at.otpResends : 0;
+  if (resends >= OTP_MAX_RESENDS) {
+    return { ok: false, error: "Too many code requests. Please try again later." };
+  }
+
   const { code, codeHash } = generateOtp();
   await db
     .update(accessTokens)
     .set({
       otpHash: codeHash,
-      otpExpiresAt: new Date(Date.now() + OTP_TTL_MS),
+      otpExpiresAt: new Date(now.getTime() + OTP_TTL_MS),
       otpAttempts: 0,
+      otpResends: resends + 1,
+      otpWindowStart: windowActive ? at.otpWindowStart : now,
+      otpLastSentAt: now,
     })
     .where(eq(accessTokens.id, at.id));
 
@@ -117,7 +141,7 @@ export async function verifyOtp(rawToken: string, code: string): Promise<ActionR
   const [req] = await db.select().from(requests).where(eq(requests.id, at.requestId));
   const meta = await requestMeta();
 
-  if (sha256(code.trim()) !== at.otpHash) {
+  if (!constantTimeEqualHex(sha256(code.trim()), at.otpHash)) {
     await db
       .update(accessTokens)
       .set({ otpAttempts: at.otpAttempts + 1 })

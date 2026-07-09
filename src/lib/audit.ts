@@ -29,7 +29,16 @@ export interface AuditInput {
   userAgent?: string | null;
 }
 
-function eventHash(prevHash: string, seq: number, e: AuditInput, at: string): string {
+interface HashableEvent {
+  orgId?: string | null;
+  actorType: string;
+  actorId?: string | null;
+  action: string;
+  targetType: string;
+  targetId?: string | null;
+}
+
+function eventHash(prevHash: string, seq: number, e: HashableEvent, at: string): string {
   const canonical = JSON.stringify({
     prevHash,
     seq,
@@ -77,6 +86,7 @@ export async function audit(e: AuditInput): Promise<void> {
       seq,
       prevHash,
       hash: eventHash(prevHash, seq, e, at),
+      hashedAt: at,
     });
   });
 }
@@ -94,7 +104,12 @@ export async function verifyChain(orgId: string | null): Promise<{
 
   let prev = GENESIS;
   for (const row of rows) {
+    // Linkage: each row must chain to the previous row's hash.
     if (row.prevHash !== prev) return { ok: false, brokenAtSeq: row.seq };
+    // Content integrity: recompute the hash from the stored columns and the
+    // persisted timestamp. Any in-place edit to content breaks this.
+    const recomputed = eventHash(row.prevHash, row.seq, row, row.hashedAt);
+    if (recomputed !== row.hash) return { ok: false, brokenAtSeq: row.seq };
     prev = row.hash;
   }
   return { ok: true };

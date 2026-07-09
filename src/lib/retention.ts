@@ -36,37 +36,37 @@ export async function purgeSubmission(
 
   const [req] = await db.select().from(requests).where(eq(requests.id, sub.requestId));
 
-  // 1. Shred every field-value DEK, then drop the ciphertext rows.
   const values = await db
     .select({ dekId: submissionValues.dekId })
     .from(submissionValues)
     .where(eq(submissionValues.submissionId, submissionId));
-  for (const v of values) await shredDataKey(v.dekId);
-  await db.delete(submissionValues).where(eq(submissionValues.submissionId, submissionId));
-
-  // 2. Delete evidence documents and their storage objects.
   const docs = await db
-    .select({ documentId: submissionDocuments.documentId })
+    .select({ documentId: submissionDocuments.documentId, storageKey: documents.storageKey })
     .from(submissionDocuments)
+    .innerJoin(documents, eq(documents.id, submissionDocuments.documentId))
     .where(eq(submissionDocuments.submissionId, submissionId));
-  await db.delete(submissionDocuments).where(eq(submissionDocuments.submissionId, submissionId));
+
+  // Shred DEKs, drop ciphertext rows, and tombstone the submission atomically:
+  // either the whole crypto-shred lands or none of it does. Storage-object
+  // deletion (external) runs after the DB commit.
+  await db.transaction(async (tx) => {
+    for (const v of values) await shredDataKey(v.dekId, tx);
+    await tx.delete(submissionValues).where(eq(submissionValues.submissionId, submissionId));
+    await tx.delete(submissionDocuments).where(eq(submissionDocuments.submissionId, submissionId));
+    for (const d of docs) await tx.delete(documents).where(eq(documents.id, d.documentId));
+    await tx
+      .update(submissions)
+      .set({ purgedAt: new Date(), responderEmail: null })
+      .where(eq(submissions.id, submissionId));
+  });
+
   for (const d of docs) {
-    const [doc] = await db.select().from(documents).where(eq(documents.id, d.documentId));
-    if (doc) {
-      try {
-        await deleteObject(doc.storageKey);
-      } catch (err) {
-        console.error(`Failed to delete object ${doc.storageKey}:`, err);
-      }
-      await db.delete(documents).where(eq(documents.id, d.documentId));
+    try {
+      await deleteObject(d.storageKey);
+    } catch (err) {
+      console.error(`Failed to delete object ${d.storageKey}:`, err);
     }
   }
-
-  // 3. Keep the submission row as a metadata-only tombstone.
-  await db
-    .update(submissions)
-    .set({ purgedAt: new Date(), responderEmail: null })
-    .where(eq(submissions.id, submissionId));
 
   await audit({
     orgId: req?.orgId,
@@ -117,13 +117,20 @@ export async function eraseCandidate(candidateAccountId: string): Promise<void> 
     .select()
     .from(walletItems)
     .where(eq(walletItems.candidateAccountId, candidateAccountId));
-  for (const item of items) await shredDataKey(item.dekId);
-  await db.delete(walletItems).where(eq(walletItems.candidateAccountId, candidateAccountId));
-
   const docs = await db
     .select()
     .from(walletDocuments)
     .where(eq(walletDocuments.candidateAccountId, candidateAccountId));
+
+  // Shred wallet DEKs and drop the rows atomically; delete objects after commit.
+  await db.transaction(async (tx) => {
+    for (const item of items) await shredDataKey(item.dekId, tx);
+    await tx.delete(walletItems).where(eq(walletItems.candidateAccountId, candidateAccountId));
+    await tx
+      .delete(walletDocuments)
+      .where(eq(walletDocuments.candidateAccountId, candidateAccountId));
+  });
+
   for (const doc of docs) {
     try {
       await deleteObject(doc.storageKey);
@@ -131,9 +138,6 @@ export async function eraseCandidate(candidateAccountId: string): Promise<void> 
       console.error(`Failed to delete object ${doc.storageKey}:`, err);
     }
   }
-  await db
-    .delete(walletDocuments)
-    .where(eq(walletDocuments.candidateAccountId, candidateAccountId));
 
   const subs = await db
     .select({ id: submissions.id })

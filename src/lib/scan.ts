@@ -13,6 +13,9 @@ export type ScanResult = "clean" | "infected" | "error";
 
 export async function scanBytes(bytes: Buffer): Promise<ScanResult> {
   if (process.env.SCAN_DISABLED === "true") {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("SCAN_DISABLED must not be set in production.");
+    }
     console.warn("[scan] SCAN_DISABLED=true — marking clean without scanning (dev only)");
     return "clean";
   }
