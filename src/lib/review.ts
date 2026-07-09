@@ -10,7 +10,7 @@ import {
   submissionShares,
   submissionValues,
 } from "@/db/schema";
-import { decryptField } from "@/lib/crypto";
+import { createDekCache, decryptFieldWithKey } from "@/lib/crypto";
 import { can } from "@/lib/rbac";
 import type { OrgContext } from "@/lib/guards";
 import { AuthError } from "@/lib/guards";
@@ -79,6 +79,7 @@ export async function loadSubmissionForReview(ctx: OrgContext, submissionId: str
     .from(submissionValues)
     .where(eq(submissionValues.submissionId, submissionId));
 
+  const dekCache = createDekCache();
   const decrypted: DecryptedValue[] = [];
   for (const f of fields) {
     if (f.type === "file_upload") continue;
@@ -89,7 +90,9 @@ export async function loadSubmissionForReview(ctx: OrgContext, submissionId: str
       label: f.label,
       type: f.type,
       sensitive: f.sensitive,
-      value: v ? await decryptField(v.valueEncrypted, v.dekId) : null,
+      value: v
+        ? decryptFieldWithKey(v.valueEncrypted, await dekCache.getKey(v.dekId))
+        : null,
     });
   }
 

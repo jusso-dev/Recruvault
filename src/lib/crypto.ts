@@ -164,6 +164,31 @@ export async function decryptField(valueEncrypted: string, dekId: string): Promi
   return aesDecrypt(dek, valueEncrypted).toString("utf8");
 }
 
+/** Decrypt a field value with an already-unwrapped DEK (no DB/KMS call). */
+export function decryptFieldWithKey(valueEncrypted: string, dek: Buffer): string {
+  return aesDecrypt(dek, valueEncrypted).toString("utf8");
+}
+
+/**
+ * Per-request memo of unwrapped DEKs. Submissions share one DEK per record, so
+ * this collapses N KMS Decrypt calls to one. Never module-global — plaintext
+ * DEKs must not outlive the request. Stores the promise to dedupe concurrent
+ * unwraps of the same key.
+ */
+export function createDekCache(): { getKey(dekId: string): Promise<Buffer> } {
+  const cache = new Map<string, Promise<Buffer>>();
+  return {
+    getKey(dekId: string): Promise<Buffer> {
+      let p = cache.get(dekId);
+      if (!p) {
+        p = getDataKey(dekId);
+        cache.set(dekId, p);
+      }
+      return p;
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Token helpers (secure links and OTP)
 // ---------------------------------------------------------------------------
