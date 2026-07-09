@@ -150,6 +150,33 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
   return { ok: true, id: request.id };
 }
 
+/** Delete a saved request template. Tenant-scoped and gated by templates:manage. */
+export async function deleteTemplate(formData: FormData): Promise<ActionResult> {
+  const ctx = await requireOrgUser("templates:manage");
+  const templateId = String(formData.get("templateId") ?? "");
+  if (!templateId) return { ok: false, error: "Missing template id." };
+
+  const [deleted] = await db
+    .delete(requestTemplates)
+    .where(and(eq(requestTemplates.id, templateId), eq(requestTemplates.orgId, ctx.orgId)))
+    .returning({ id: requestTemplates.id });
+  if (!deleted) return { ok: false, error: "Template not found." };
+
+  const meta = await requestMeta();
+  await audit({
+    orgId: ctx.orgId,
+    actorType: "org_user",
+    actorId: ctx.userId,
+    action: "template.deleted",
+    targetType: "request_template",
+    targetId: templateId,
+    ...meta,
+  });
+
+  revalidatePath("/dashboard/requests/new");
+  return { ok: true };
+}
+
 /** Queue delivery of a secure link by email (and optionally SMS). */
 export async function sendRequest(formData: FormData): Promise<ActionResult> {
   const ctx = await requireOrgUser("requests:create");

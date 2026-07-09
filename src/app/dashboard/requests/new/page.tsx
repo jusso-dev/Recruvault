@@ -1,6 +1,11 @@
+import Link from "next/link";
+import { eq, desc } from "drizzle-orm";
+import { db } from "@/db";
+import { requestTemplates } from "@/db/schema";
 import { requireOrgUser } from "@/lib/guards";
-import { createRequest } from "@/actions/requests";
-import { FIELD_LIBRARY } from "@/lib/fields";
+import { createRequest, deleteTemplate } from "@/actions/requests";
+import { FIELD_LIBRARY, type RequestTemplateDefinition } from "@/lib/fields";
+import { can } from "@/lib/rbac";
 import { ActionForm } from "@/components/action-form";
 import {
   Button,
@@ -14,8 +19,29 @@ import {
   Textarea,
 } from "@/components/ui";
 
-export default async function NewRequestPage() {
-  await requireOrgUser("requests:create");
+export default async function NewRequestPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ template?: string }>;
+}) {
+  const ctx = await requireOrgUser("requests:create");
+  const canManageTemplates = can(ctx.role, "templates:manage");
+
+  const templates = await db
+    .select({
+      id: requestTemplates.id,
+      name: requestTemplates.name,
+      definition: requestTemplates.definition,
+    })
+    .from(requestTemplates)
+    .where(eq(requestTemplates.orgId, ctx.orgId))
+    .orderBy(desc(requestTemplates.createdAt));
+
+  const sp = await searchParams;
+  const selected = templates.find((t) => t.id === sp.template);
+  const def = selected?.definition as RequestTemplateDefinition | undefined;
+  const selectedKeys = new Set(def?.libraryKeys ?? []);
+  const customFieldsDefault = (def?.customLabels ?? []).join("\n");
 
   const clearanceFields = FIELD_LIBRARY.filter((f) => f.key.startsWith("clearance") || f.key === "sponsoring_agency");
   const identityFields = FIELD_LIBRARY.filter((f) => !clearanceFields.includes(f));
@@ -23,6 +49,61 @@ export default async function NewRequestPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <h1 className="text-2xl font-bold">New secure request</h1>
+
+      {templates.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Start from a template</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              {templates.map((t) => (
+                <div
+                  key={t.id}
+                  className={`flex items-center gap-1 rounded-full border px-1 ${
+                    t.id === selected?.id ? "border-zinc-800 bg-zinc-50" : "border-zinc-200"
+                  }`}
+                >
+                  <Link
+                    href={`/dashboard/requests/new?template=${t.id}`}
+                    className="px-2 py-1 text-sm hover:underline"
+                  >
+                    {t.name}
+                  </Link>
+                  {canManageTemplates && (
+                    <ActionForm action={deleteTemplate} className="flex">
+                      <input type="hidden" name="templateId" value={t.id} />
+                      <Button
+                        type="submit"
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Delete template ${t.name}`}
+                        className="h-6 w-6 p-0 text-zinc-400"
+                      >
+                        ×
+                      </Button>
+                    </ActionForm>
+                  )}
+                </div>
+              ))}
+            </div>
+            {selected ? (
+              <p className="text-xs text-zinc-500">
+                Pre-filled from <span className="font-medium">{selected.name}</span>. Adjust
+                anything before creating.{" "}
+                <Link href="/dashboard/requests/new" className="underline">
+                  Start blank
+                </Link>
+              </p>
+            ) : (
+              <p className="text-xs text-zinc-500">
+                Pick a template to pre-fill the form below.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <ActionForm
         action={createRequest}
         redirectTo="/dashboard/requests/:id"
@@ -35,19 +116,30 @@ export default async function NewRequestPage() {
           <CardContent className="space-y-3">
             <div>
               <Label htmlFor="title">Title</Label>
-              <Input id="title" name="title" required placeholder="Senior Systems Engineer — NV1" />
+              <Input
+                id="title"
+                name="title"
+                required
+                placeholder="Senior Systems Engineer — NV1"
+                defaultValue={def?.title ?? ""}
+              />
             </div>
             <div>
               <Label htmlFor="description">Description (shown to the candidate)</Label>
-              <Textarea id="description" name="description" />
+              <Textarea id="description" name="description" defaultValue={def?.description ?? ""} />
             </div>
             <div>
               <Label htmlFor="jd">Job description (PDF, stored encrypted)</Label>
               <Input id="jd" name="jd" type="file" accept="application/pdf" />
+              {def && (
+                <p className="mt-1 text-xs text-zinc-500">
+                  Templates don&apos;t carry the JD file — attach one if needed.
+                </p>
+              )}
             </div>
             <div>
               <Label htmlFor="jdViewMode">JD access</Label>
-              <Select id="jdViewMode" name="jdViewMode" defaultValue="view_only">
+              <Select id="jdViewMode" name="jdViewMode" defaultValue={def?.jdViewMode ?? "view_only"}>
                 <option value="view_only">View in browser only (watermarked)</option>
                 <option value="allow_download">Allow download</option>
               </Select>
@@ -67,7 +159,13 @@ export default async function NewRequestPage() {
               <div className="space-y-2">
                 {clearanceFields.map((f) => (
                   <label key={f.key} className="flex items-start gap-2 text-sm">
-                    <input type="checkbox" name="fields" value={f.key} className="mt-0.5" />
+                    <input
+                      type="checkbox"
+                      name="fields"
+                      value={f.key}
+                      className="mt-0.5"
+                      defaultChecked={selectedKeys.has(f.key)}
+                    />
                     <span>
                       {f.label}
                       {f.helpText && (
@@ -85,7 +183,13 @@ export default async function NewRequestPage() {
               <div className="space-y-2">
                 {identityFields.map((f) => (
                   <label key={f.key} className="flex items-start gap-2 text-sm">
-                    <input type="checkbox" name="fields" value={f.key} className="mt-0.5" />
+                    <input
+                      type="checkbox"
+                      name="fields"
+                      value={f.key}
+                      className="mt-0.5"
+                      defaultChecked={selectedKeys.has(f.key)}
+                    />
                     <span>
                       {f.label}
                       {f.helpText && (
@@ -102,6 +206,7 @@ export default async function NewRequestPage() {
                 id="customFields"
                 name="customFields"
                 placeholder={"Notice period\nPreferred location"}
+                defaultValue={customFieldsDefault}
               />
             </div>
           </CardContent>
