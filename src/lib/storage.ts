@@ -6,14 +6,14 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { Readable } from "stream";
 
 /**
  * Document storage: private S3 bucket (ap-southeast-2) with SSE-KMS, no
- * public access. Objects are reached only through short-lived presigned URLs
- * issued after authorisation checks, or streamed through an authorised route.
- * Originals are never exposed through a public path.
+ * public access. Uploads buffer through the app server so every file is
+ * content-sniffed and virus-scanned before it becomes visible; reads stream
+ * through an authorised route. Originals are never exposed through a public
+ * path, and there is no direct browser-to-S3 access.
  */
 
 const BUCKET = process.env.S3_BUCKET ?? "recruvault-documents";
@@ -37,18 +37,6 @@ export function newStorageKey(scope: "org" | "wallet", ownerId: string, fileName
   return `${scope}/${ownerId}/${randomUUID()}/${safe}`;
 }
 
-/** Short-lived presigned PUT for direct browser upload. */
-export async function presignUpload(storageKey: string, contentType: string) {
-  const cmd = new PutObjectCommand({
-    Bucket: BUCKET,
-    Key: storageKey,
-    ContentType: contentType,
-    ServerSideEncryption: "aws:kms",
-    ...(process.env.KMS_KEY_ID ? { SSEKMSKeyId: process.env.KMS_KEY_ID } : {}),
-  });
-  return getSignedUrl(client(), cmd, { expiresIn: 300 });
-}
-
 /** Server-side upload (small files pass through the app server). */
 export async function putObjectBytes(
   storageKey: string,
@@ -65,18 +53,6 @@ export async function putObjectBytes(
       ...(process.env.KMS_KEY_ID ? { SSEKMSKeyId: process.env.KMS_KEY_ID } : {}),
     }),
   );
-}
-
-/** Short-lived presigned GET, issued only after an authorisation check. */
-export async function presignDownload(storageKey: string, fileName?: string) {
-  const cmd = new GetObjectCommand({
-    Bucket: BUCKET,
-    Key: storageKey,
-    ...(fileName
-      ? { ResponseContentDisposition: `attachment; filename="${fileName}"` }
-      : {}),
-  });
-  return getSignedUrl(client(), cmd, { expiresIn: 120 });
 }
 
 /** Server-side stream for in-browser rendering through an authorised route. */

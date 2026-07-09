@@ -5,7 +5,14 @@ import { magicLink } from "better-auth/plugins";
 import { passkey } from "@better-auth/passkey";
 import { nextCookies } from "better-auth/next-js";
 import { db } from "@/db";
-import { user, session, account, verification, passkey as passkeyTable } from "@/db/schema";
+import {
+  user,
+  session,
+  account,
+  verification,
+  passkey as passkeyTable,
+  rateLimit,
+} from "@/db/schema";
 import { sendAuthEmail } from "@/lib/email";
 
 /**
@@ -21,8 +28,22 @@ export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET,
   database: drizzleAdapter(db, {
     provider: "pg",
-    schema: { user, session, account, verification, passkey: passkeyTable },
+    schema: { user, session, account, verification, passkey: passkeyTable, rateLimit },
   }),
+  // Database-backed so limits hold across app instances. Tight custom rules on
+  // the credential and magic-link endpoints; a default cap on everything else.
+  rateLimit: {
+    enabled: true,
+    window: 60,
+    max: 20,
+    storage: "database",
+    modelName: "rateLimit",
+    customRules: {
+      "/sign-in/email": { window: 60, max: 5 },
+      "/sign-up/email": { window: 60, max: 5 },
+      "/magic-link/send": { window: 60, max: 3 },
+    },
+  },
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: false,

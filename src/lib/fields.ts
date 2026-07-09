@@ -149,6 +149,19 @@ export function fieldDefinition(key: string): FieldDefinition | undefined {
   return FIELD_LIBRARY.find((f) => f.key === key);
 }
 
+/**
+ * Shape stored in request_templates.definition (jsonb). Written by
+ * createRequest when "save as template" is checked; read back to pre-fill the
+ * new-request form.
+ */
+export interface RequestTemplateDefinition {
+  title: string;
+  description: string | null;
+  libraryKeys: string[];
+  customLabels: string[];
+  jdViewMode: "view_only" | "allow_download";
+}
+
 /** Wallet item types a seeker can store, derived from the field library. */
 export const WALLET_ITEM_TYPES = FIELD_LIBRARY.filter(
   (f) => f.walletType && f.type !== "file_upload",

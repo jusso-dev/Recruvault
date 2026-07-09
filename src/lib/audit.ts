@@ -1,8 +1,8 @@
 import "server-only";
 import { createHash } from "crypto";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditEvents } from "@/db/schema";
+import { auditChainCheckpoints, auditEvents } from "@/db/schema";
 
 /**
  * Append-only, hash-chained audit trail.
@@ -38,7 +38,8 @@ interface HashableEvent {
   targetId?: string | null;
 }
 
-function eventHash(prevHash: string, seq: number, e: HashableEvent, at: string): string {
+/** Exported for tests — the canonical per-event hash over content + linkage. */
+export function eventHash(prevHash: string, seq: number, e: HashableEvent, at: string): string {
   const canonical = JSON.stringify({
     prevHash,
     seq,
@@ -53,7 +54,7 @@ function eventHash(prevHash: string, seq: number, e: HashableEvent, at: string):
   return createHash("sha256").update(canonical).digest("hex");
 }
 
-const GENESIS = "0".repeat(64);
+export const GENESIS = "0".repeat(64);
 
 export async function audit(e: AuditInput): Promise<void> {
   await db.transaction(async (tx) => {
@@ -91,7 +92,37 @@ export async function audit(e: AuditInput): Promise<void> {
   });
 }
 
-/** Verify the integrity of an organisation's audit chain. */
+interface VerifiableRow extends HashableEvent {
+  seq: number;
+  prevHash: string;
+  hash: string;
+  hashedAt: string;
+}
+
+/**
+ * Pure chain verification over an ordered slice of rows. Checks both linkage
+ * (each row chains to the previous hash) and content integrity (the stored
+ * hash recomputes from the stored columns). DB-free, so unit-testable.
+ */
+export function verifyChainRows(
+  rows: VerifiableRow[],
+  startPrevHash: string = GENESIS,
+): { ok: boolean; brokenAtSeq?: number; lastSeq?: number; lastHash?: string } {
+  let prev = startPrevHash;
+  let lastSeq: number | undefined;
+  let lastHash: string | undefined;
+  for (const row of rows) {
+    if (row.prevHash !== prev) return { ok: false, brokenAtSeq: row.seq };
+    const recomputed = eventHash(row.prevHash, row.seq, row, row.hashedAt);
+    if (recomputed !== row.hash) return { ok: false, brokenAtSeq: row.seq };
+    prev = row.hash;
+    lastSeq = row.seq;
+    lastHash = row.hash;
+  }
+  return { ok: true, lastSeq, lastHash };
+}
+
+/** Verify the full integrity of an organisation's audit chain. */
 export async function verifyChain(orgId: string | null): Promise<{
   ok: boolean;
   brokenAtSeq?: number;
@@ -101,27 +132,77 @@ export async function verifyChain(orgId: string | null): Promise<{
     .from(auditEvents)
     .where(orgId ? eq(auditEvents.orgId, orgId) : isNull(auditEvents.orgId))
     .orderBy(auditEvents.seq);
+  return verifyChainRows(rows);
+}
 
-  let prev = GENESIS;
-  for (const row of rows) {
-    // Linkage: each row must chain to the previous row's hash.
-    if (row.prevHash !== prev) return { ok: false, brokenAtSeq: row.seq };
-    // Content integrity: recompute the hash from the stored columns and the
-    // persisted timestamp. Any in-place edit to content breaks this.
-    const recomputed = eventHash(row.prevHash, row.seq, row, row.hashedAt);
-    if (recomputed !== row.hash) return { ok: false, brokenAtSeq: row.seq };
-    prev = row.hash;
+/**
+ * Incrementally verify only rows appended since the last checkpoint, then
+ * advance the checkpoint. O(new rows) per page load instead of O(whole chain).
+ *
+ * Caveat: a checkpoint attests "verified up to seq N once"; retroactive
+ * tampering at or below N is only caught by a full `verifyChain`.
+ */
+export async function verifyChainIncremental(orgId: string | null): Promise<{
+  ok: boolean;
+  brokenAtSeq?: number;
+}> {
+  const chainScope = orgId ?? "global";
+  const [checkpoint] = await db
+    .select()
+    .from(auditChainCheckpoints)
+    .where(eq(auditChainCheckpoints.chainScope, chainScope));
+
+  const scopeFilter = orgId ? eq(auditEvents.orgId, orgId) : isNull(auditEvents.orgId);
+  const rows = await db
+    .select()
+    .from(auditEvents)
+    .where(
+      checkpoint
+        ? and(scopeFilter, gt(auditEvents.seq, checkpoint.verifiedThroughSeq))
+        : scopeFilter,
+    )
+    .orderBy(auditEvents.seq);
+
+  const result = verifyChainRows(rows, checkpoint?.hash ?? GENESIS);
+  if (!result.ok) return { ok: false, brokenAtSeq: result.brokenAtSeq };
+
+  if (result.lastSeq !== undefined && result.lastHash !== undefined) {
+    await db
+      .insert(auditChainCheckpoints)
+      .values({
+        chainScope,
+        verifiedThroughSeq: result.lastSeq,
+        hash: result.lastHash,
+      })
+      .onConflictDoUpdate({
+        target: auditChainCheckpoints.chainScope,
+        set: {
+          verifiedThroughSeq: result.lastSeq,
+          hash: result.lastHash,
+          updatedAt: new Date(),
+        },
+      });
   }
   return { ok: true };
 }
 
-export async function listAuditEvents(orgId: string, limit = 200) {
-  return db
+export async function listAuditEvents(
+  orgId: string,
+  opts: { limit?: number; beforeSeq?: number } = {},
+) {
+  const limit = opts.limit ?? 100;
+  const where =
+    opts.beforeSeq !== undefined
+      ? and(eq(auditEvents.orgId, orgId), lt(auditEvents.seq, opts.beforeSeq))
+      : eq(auditEvents.orgId, orgId);
+  const rows = await db
     .select()
     .from(auditEvents)
-    .where(eq(auditEvents.orgId, orgId))
+    .where(where)
     .orderBy(desc(auditEvents.seq))
-    .limit(limit);
+    .limit(limit + 1);
+  const hasMore = rows.length > limit;
+  return { events: rows.slice(0, limit), hasMore };
 }
 
 export async function listAuditEventsForTarget(targetType: string, targetId: string) {

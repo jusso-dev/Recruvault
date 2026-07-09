@@ -14,7 +14,7 @@ import {
 import { requireCandidate, requestMeta } from "@/lib/guards";
 import { encryptField, shredDataKey } from "@/lib/crypto";
 import { audit } from "@/lib/audit";
-import { inngest } from "@/inngest/client";
+import { sendEvent } from "@/inngest/client";
 import { newStorageKey, putObjectBytes, deleteObject } from "@/lib/storage";
 import { sniffContentType } from "@/lib/scan";
 import {
@@ -141,10 +141,7 @@ export async function uploadWalletDocument(formData: FormData): Promise<ActionRe
     })
     .returning({ id: walletDocuments.id });
 
-  await inngest.send({
-    name: "document/uploaded",
-    data: { documentId: doc.id, table: "wallet_documents" },
-  });
+  await sendEvent("document/uploaded", { documentId: doc.id, table: "wallet_documents" });
 
   const meta = await requestMeta();
   await audit({

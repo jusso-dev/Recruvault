@@ -9,9 +9,9 @@ This is a passion project: public, MIT-licensed, and self-hostable by anyone. Is
 - **Organisations, users, and RBAC** — Owner / Admin / Recruiter / Reviewer / Compliance roles, enforced in the data layer (tenant + ownership checks on every read), never just the UI (`src/lib/rbac.ts`, `src/lib/guards.ts`).
 - **Job seeker accounts and wallet** — email + password, magic link, and passkey sign-in (BetterAuth). Reusable credentials and documents, field-level encrypted, with a consent ledger and per-share revocation. Wallet data is self-declared and never presented as verified.
 - **Favourite / saved roles** — seekers see roles sent to them, roles they responded to, and roles listed by orgs they've engaged with. Never a public job board.
-- **Secure requests** — JD attachment (encrypted, virus-scanned, watermarked in-browser view), field library seeded with current AGSVA clearance levels (configurable — the PV → TS-PA transition is live), delivery + expiry settings, consent gate.
+- **Secure requests** — JD attachment (encrypted, virus-scanned, and served with a per-view watermark burned into the PDF), field library seeded with current AGSVA clearance levels (configurable — the PV → TS-PA transition is live), delivery + expiry settings, consent gate.
 - **Delivery** — opaque single-purpose expiring links by email (Resend) and SMS (AWS SNS), sent through Inngest with retries. Recruiters see sent / opened / started / submitted without seeing data before submission.
-- **Job seeker flow** — mobile-first: OTP step-up (defends forwarded links), versioned consent with IP + timestamp, watermarked JD view, wallet pre-fill, controlled uploads (type/size limits, content sniffing, ClamAV before visibility).
+- **Job seeker flow** — mobile-first: OTP step-up (defends forwarded links), versioned consent with IP + timestamp, watermarked JD view (viewer identity + timestamp burned into every page for traceability), wallet pre-fill, controlled uploads (type/size limits, content sniffing, ClamAV before visibility).
 - **Review and export** — in-browser rendering through authorised audited routes (no public URLs), submission statuses, CSV/JSON export of decrypted structured data as a logged, role-gated action.
 - **Security core** — envelope encryption (per-record DEKs wrapped by AWS KMS in ap-southeast-2, local KEK for dev), field-level encryption for PII, private S3 (or MinIO) with SSE-KMS.
 - **Audit trail** — append-only, hash-chained per organisation, tamper-evident (integrity is verified on the audit page). No PII in the log; survives purges as a metadata-only record.
@@ -19,7 +19,7 @@ This is a passion project: public, MIT-licensed, and self-hostable by anyone. Is
 
 ## Stack
 
-Next.js (App Router) · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/KMS/SNS (or MinIO) · ClamAV · Docker Compose.
+Next.js 16 (App Router) · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/KMS/SNS (or MinIO) · ClamAV · Docker Compose.
 
 ## Local development
 
@@ -49,13 +49,16 @@ Without `RESEND_API_KEY`, emails (secure links, OTP codes) are logged to the dev
 
 ## Self-hosting
 
-`docker compose up` builds the app and runs PostgreSQL, ClamAV, and MinIO (S3-compatible), so a deployment can be fully self-contained — no AWS account required. If you prefer AWS, point the S3/KMS env vars at real services (ap-southeast-2 keeps data resident in Australia).
+`docker compose up` builds the app and runs PostgreSQL, ClamAV, and MinIO (S3-compatible), so a deployment can be fully self-contained — no AWS account required. On startup a one-shot `migrate` service applies the database migrations and a `minio-init` service creates the documents bucket, and the app waits for both plus a healthy ClamAV before booting — so a fresh `docker compose up` yields a working stack with no manual steps. ClamAV's first boot takes a few minutes to load signatures; the healthcheck accounts for this.
+
+Set `BETTER_AUTH_SECRET` (required) and, for the KMS-less local-KEK path, `LOCAL_KEK` (32 bytes of hex) with `ALLOW_LOCAL_KEK_IN_PRODUCTION=true`. If you prefer AWS, point the S3/KMS env vars at real services (ap-southeast-2 keeps data resident in Australia).
 
 ## Security posture
 
 - Handling classification: **OFFICIAL: Sensitive at most** — candidate-declared clearance information and identity documents for screening, never classified material.
 - AU data residency by default (ap-southeast-2 for data and keys) when using AWS.
 - Recruvault does **not** verify identity documents; it stores and presents them for recruiter review. Verification would be a future integration.
+- Document watermarking burns viewer identity + timestamp into every rendered page, so a leaked view-only copy is **traceable** — it is not DRM. The overlaid text is still extractable from the served bytes; true anti-extraction would need server-side page rasterisation (a native renderer), which isn't implemented. Permitted downloads serve the clean original by design.
 - Confirm AGSVA clearance nomenclature periodically and update `REFERENCE_SEED` in `src/lib/fields.ts` — the framework is mid-transition (PV phasing out in favour of TS-PA).
 
 ## Layout

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { requestFields, requests, submissions, submissionValues } from "@/db/schema";
 import { requireOrgUser, requestMeta, AuthError } from "@/lib/guards";
-import { decryptField } from "@/lib/crypto";
+import { createDekCache, decryptFieldWithKey } from "@/lib/crypto";
 import { audit } from "@/lib/audit";
 import { can } from "@/lib/rbac";
 
@@ -52,12 +52,24 @@ export async function GET(
     .from(submissions)
     .where(and(eq(submissions.requestId, id), isNull(submissions.purgedAt)));
 
+  // Batch-load all values in one query and reuse each submission's DEK.
+  const allValues = subs.length
+    ? await db
+        .select()
+        .from(submissionValues)
+        .where(inArray(submissionValues.submissionId, subs.map((s) => s.id)))
+    : [];
+  const valuesBySubmission = new Map<string, typeof allValues>();
+  for (const v of allValues) {
+    const list = valuesBySubmission.get(v.submissionId) ?? [];
+    list.push(v);
+    valuesBySubmission.set(v.submissionId, list);
+  }
+
+  const dekCache = createDekCache();
   const rows: Record<string, string>[] = [];
   for (const sub of subs) {
-    const values = await db
-      .select()
-      .from(submissionValues)
-      .where(eq(submissionValues.submissionId, sub.id));
+    const values = valuesBySubmission.get(sub.id) ?? [];
     const row: Record<string, string> = {
       submission_id: sub.id,
       status: sub.status,
@@ -66,7 +78,9 @@ export async function GET(
     };
     for (const f of textFields) {
       const v = values.find((x) => x.fieldId === f.id);
-      row[f.label] = v ? await decryptField(v.valueEncrypted, v.dekId) : "";
+      row[f.label] = v
+        ? decryptFieldWithKey(v.valueEncrypted, await dekCache.getKey(v.dekId))
+        : "";
     }
     rows.push(row);
   }

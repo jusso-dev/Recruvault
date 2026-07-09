@@ -25,14 +25,18 @@ import {
   sha256,
 } from "@/lib/crypto";
 import { issueLinkSession, readLinkSession, clearLinkSession } from "@/lib/link-session";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { getLogger } from "@/lib/logger";
 import { sendOtpEmail, sendSubmissionReceived } from "@/lib/email";
 import { audit } from "@/lib/audit";
 import { getSession, requestMeta } from "@/lib/guards";
-import { inngest } from "@/inngest/client";
-import { newStorageKey, putObjectBytes } from "@/lib/storage";
+import { sendEvent } from "@/inngest/client";
+import { newStorageKey, putObjectBytes, deleteObject } from "@/lib/storage";
 import { sniffContentType } from "@/lib/scan";
 import { UPLOAD_ALLOWED_TYPES, UPLOAD_MAX_BYTES } from "@/lib/fields";
 import type { ActionResult } from "./org";
+
+const log = getLogger("link");
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 5;
@@ -70,9 +74,16 @@ async function orgSender(orgId: string) {
  * link being used by the wrong person.
  */
 export async function requestOtp(rawToken: string): Promise<ActionResult> {
+  const meta = await requestMeta();
+  // IP-level throttle across all tokens (complements the per-token resend cap).
+  if (!(await checkRateLimit(`otp:request:${meta.ip ?? "unknown"}`, 10, 60_000))) {
+    return { ok: false, error: "Too many requests. Please try again shortly." };
+  }
+
   const at = await loadToken(rawToken);
   if (!at) return { ok: false, error: "This link is not valid." };
   if (at.expiresAt < new Date()) return { ok: false, error: "This link has expired." };
+  if (at.revokedAt) return { ok: false, error: "This link has been revoked by the sender." };
   if (at.consumedAt) return { ok: false, error: "This request has already been completed." };
 
   const now = new Date();
@@ -104,7 +115,6 @@ export async function requestOtp(rawToken: string): Promise<ActionResult> {
   const [req] = await db.select().from(requests).where(eq(requests.id, at.requestId));
   await sendOtpEmail({ to: at.recipientEmail, code, org: await orgSender(req.orgId) });
 
-  const meta = await requestMeta();
   await audit({
     orgId: req.orgId,
     actorType: "link_responder",
@@ -127,9 +137,15 @@ export async function requestOtp(rawToken: string): Promise<ActionResult> {
 }
 
 export async function verifyOtp(rawToken: string, code: string): Promise<ActionResult> {
+  const meta = await requestMeta();
+  if (!(await checkRateLimit(`otp:verify:${meta.ip ?? "unknown"}`, 15, 60_000))) {
+    return { ok: false, error: "Too many attempts. Please try again shortly." };
+  }
+
   const at = await loadToken(rawToken);
   if (!at) return { ok: false, error: "This link is not valid." };
   if (at.expiresAt < new Date()) return { ok: false, error: "This link has expired." };
+  if (at.revokedAt) return { ok: false, error: "This link has been revoked by the sender." };
   if (at.consumedAt) return { ok: false, error: "This request has already been completed." };
   if (!at.otpHash || !at.otpExpiresAt || at.otpExpiresAt < new Date()) {
     return { ok: false, error: "The code has expired. Request a new one." };
@@ -139,7 +155,6 @@ export async function verifyOtp(rawToken: string, code: string): Promise<ActionR
   }
 
   const [req] = await db.select().from(requests).where(eq(requests.id, at.requestId));
-  const meta = await requestMeta();
 
   if (!constantTimeEqualHex(sha256(code.trim()), at.otpHash)) {
     await db
@@ -190,6 +205,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
     .from(accessTokens)
     .where(eq(accessTokens.id, accessTokenId));
   if (!at || !at.verifiedAt) return { ok: false, error: "Verification required." };
+  if (at.revokedAt) return { ok: false, error: "This link has been revoked by the sender." };
   if (at.consumedAt) return { ok: false, error: "This request has already been completed." };
   if (at.expiresAt < new Date()) return { ok: false, error: "This link has expired." };
 
@@ -211,20 +227,52 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
     .where(eq(requestFields.requestId, request.id))
     .orderBy(requestFields.sortOrder);
 
-  // Validate before writing anything.
+  // --- Phase 1: validate everything up front. No writes yet. ---
+  const preparedUploads: {
+    fieldId: string;
+    bytes: Buffer;
+    contentType: string;
+    fileName: string;
+    size: number;
+    checksum: string;
+    storageKey: string;
+  }[] = [];
+  const preparedValues: { fieldId: string; raw: string }[] = [];
+
   for (const f of fields) {
-    if (!f.required) continue;
     if (f.type === "file_upload") {
       const file = formData.get(`field_${f.id}`);
       if (!(file instanceof File) || file.size === 0) {
-        return { ok: false, error: `"${f.label}" requires an upload.` };
+        if (f.required) return { ok: false, error: `"${f.label}" requires an upload.` };
+        continue;
       }
+      if (file.size > UPLOAD_MAX_BYTES) {
+        return { ok: false, error: `"${f.label}" exceeds the 15 MB limit.` };
+      }
+      const bytes = Buffer.from(await file.arrayBuffer());
+      const sniffed = sniffContentType(bytes);
+      if (!sniffed || !UPLOAD_ALLOWED_TYPES.includes(sniffed)) {
+        return { ok: false, error: `"${f.label}" must be a PDF or an image.` };
+      }
+      preparedUploads.push({
+        fieldId: f.id,
+        bytes,
+        contentType: sniffed,
+        fileName: file.name,
+        size: file.size,
+        checksum: createHash("sha256").update(bytes).digest("hex"),
+        storageKey: newStorageKey("org", request.orgId, file.name),
+      });
     } else {
-      const v = String(formData.get(`field_${f.id}`) ?? "").trim();
-      if (!v) return { ok: false, error: `"${f.label}" is required.` };
-      if (f.type === "date" && Number.isNaN(new Date(v).getTime())) {
+      const raw = String(formData.get(`field_${f.id}`) ?? "").trim();
+      if (!raw) {
+        if (f.required) return { ok: false, error: `"${f.label}" is required.` };
+        continue;
+      }
+      if (f.type === "date" && Number.isNaN(new Date(raw).getTime())) {
         return { ok: false, error: `"${f.label}" must be a valid date.` };
       }
+      preparedValues.push({ fieldId: f.id, raw });
     }
   }
 
@@ -239,87 +287,8 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
 
   const meta = await requestMeta();
 
-  const [submission] = await db
-    .insert(submissions)
-    .values({
-      requestId: request.id,
-      candidateAccountId,
-      accessTokenId: at.id,
-      responderEmail: at.recipientEmail,
-      status: "received",
-      submittedAt: new Date(),
-    })
-    .returning({ id: submissions.id });
-
-  // One DEK per submission: shredding it renders every field unrecoverable.
-  const { dekId, dek } = await createDataKey();
-
-  for (const f of fields) {
-    if (f.type === "file_upload") {
-      const file = formData.get(`field_${f.id}`);
-      if (!(file instanceof File) || file.size === 0) continue;
-      if (file.size > UPLOAD_MAX_BYTES) {
-        return { ok: false, error: `"${f.label}" exceeds the 15 MB limit.` };
-      }
-      const bytes = Buffer.from(await file.arrayBuffer());
-      const sniffed = sniffContentType(bytes);
-      if (!sniffed || !UPLOAD_ALLOWED_TYPES.includes(sniffed)) {
-        return { ok: false, error: `"${f.label}" must be a PDF or an image.` };
-      }
-      const storageKey = newStorageKey("org", request.orgId, file.name);
-      await putObjectBytes(storageKey, bytes, sniffed);
-      const [doc] = await db
-        .insert(documents)
-        .values({
-          orgId: request.orgId,
-          kind: "evidence",
-          fileName: file.name,
-          contentType: sniffed,
-          sizeBytes: file.size,
-          storageKey,
-          checksum: createHash("sha256").update(bytes).digest("hex"),
-        })
-        .returning({ id: documents.id });
-      await db.insert(submissionDocuments).values({
-        submissionId: submission.id,
-        fieldId: f.id,
-        documentId: doc.id,
-      });
-      await inngest.send({
-        name: "document/uploaded",
-        data: { documentId: doc.id, table: "documents" },
-      });
-    } else {
-      const raw = String(formData.get(`field_${f.id}`) ?? "").trim();
-      if (!raw) continue;
-      await db.insert(submissionValues).values({
-        submissionId: submission.id,
-        fieldId: f.id,
-        valueEncrypted: await encryptFieldWithKey(raw, dek),
-        dekId,
-      });
-    }
-  }
-
-  // Consent records: versioned, timestamped, with IP.
-  if (request.consentRequired) {
-    await db.insert(consents).values({
-      submissionId: submission.id,
-      type: "collection",
-      noticeVersion: request.consentNoticeVersion,
-      ip: meta.ip,
-    });
-  }
-  if (request.ndaDocumentId) {
-    await db.insert(consents).values({
-      submissionId: submission.id,
-      type: "nda",
-      noticeVersion: request.consentNoticeVersion,
-      ip: meta.ip,
-    });
-  }
-
-  // Consent ledger: record wallet items used to pre-fill this submission.
+  // Wallet items the seeker chose to share (validated against ownership).
+  let sharedWalletItemIds: string[] = [];
   if (candidateAccountId) {
     const usedItemIds = formData.getAll("walletItemsUsed").map(String).filter(Boolean);
     if (usedItemIds.length > 0) {
@@ -332,51 +301,166 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
             inArray(walletItems.id, usedItemIds),
           ),
         );
-      for (const item of owned) {
-        await db.insert(walletShares).values({
-          candidateAccountId,
-          submissionId: submission.id,
-          walletItemId: item.id,
-          orgId: request.orgId,
-        });
-      }
+      sharedWalletItemIds = owned.map((o) => o.id);
     }
   }
 
-  await db
-    .update(accessTokens)
-    .set({ consumedAt: new Date() })
-    .where(eq(accessTokens.id, at.id));
-  await db
-    .update(deliveries)
-    .set({ status: "submitted", updatedAt: new Date() })
-    .where(eq(deliveries.accessTokenId, at.id));
+  // --- Phase 2: upload objects to S3 (external, pre-transaction). ---
+  const uploadedKeys: string[] = [];
+  try {
+    for (const u of preparedUploads) {
+      await putObjectBytes(u.storageKey, u.bytes, u.contentType);
+      uploadedKeys.push(u.storageKey);
+    }
 
-  await audit({
-    orgId: request.orgId,
-    actorType: candidateAccountId ? "candidate" : "link_responder",
-    actorId: candidateAccountId ?? at.id,
-    action: "submission.created",
-    targetType: "submission",
-    targetId: submission.id,
-    ...meta,
-  });
+    // --- Phase 3: one transaction — either the whole submission lands or none. ---
+    const result = await db.transaction(async (tx) => {
+      // Consume the token first, with a race guard so a double-submit can't
+      // create two submissions.
+      const consumed = await tx
+        .update(accessTokens)
+        .set({ consumedAt: new Date() })
+        .where(and(eq(accessTokens.id, at.id), isNull(accessTokens.consumedAt)))
+        .returning({ id: accessTokens.id });
+      if (consumed.length === 0) return { alreadyDone: true as const };
 
-  const [org] = await db
-    .select()
-    .from(organisations)
-    .where(eq(organisations.id, request.orgId));
-  await sendSubmissionReceived({
-    to: at.recipientEmail,
-    org: await orgSender(request.orgId),
-    requestTitle: request.title,
-    retentionDays: org.retentionDays,
-  });
-  await inngest.send({
-    name: "submission/received",
-    data: { submissionId: submission.id },
-  });
+      const [submission] = await tx
+        .insert(submissions)
+        .values({
+          requestId: request.id,
+          candidateAccountId,
+          accessTokenId: at.id,
+          responderEmail: at.recipientEmail,
+          status: "received",
+          submittedAt: new Date(),
+        })
+        .returning({ id: submissions.id });
 
-  await clearLinkSession();
-  return { ok: true, id: submission.id };
+      // One DEK per submission: shredding it renders every field unrecoverable.
+      const { dekId, dek } = await createDataKey(tx);
+
+      if (preparedValues.length > 0) {
+        const rows = await Promise.all(
+          preparedValues.map(async (v) => ({
+            submissionId: submission.id,
+            fieldId: v.fieldId,
+            valueEncrypted: await encryptFieldWithKey(v.raw, dek),
+            dekId,
+          })),
+        );
+        await tx.insert(submissionValues).values(rows);
+      }
+
+      const documentIds: string[] = [];
+      for (const u of preparedUploads) {
+        const [doc] = await tx
+          .insert(documents)
+          .values({
+            orgId: request.orgId,
+            kind: "evidence",
+            fileName: u.fileName,
+            contentType: u.contentType,
+            sizeBytes: u.size,
+            storageKey: u.storageKey,
+            checksum: u.checksum,
+          })
+          .returning({ id: documents.id });
+        await tx.insert(submissionDocuments).values({
+          submissionId: submission.id,
+          fieldId: u.fieldId,
+          documentId: doc.id,
+        });
+        documentIds.push(doc.id);
+      }
+
+      // Consent records: versioned, timestamped, with IP.
+      if (request.consentRequired) {
+        await tx.insert(consents).values({
+          submissionId: submission.id,
+          type: "collection",
+          noticeVersion: request.consentNoticeVersion,
+          ip: meta.ip,
+        });
+      }
+      if (request.ndaDocumentId) {
+        await tx.insert(consents).values({
+          submissionId: submission.id,
+          type: "nda",
+          noticeVersion: request.consentNoticeVersion,
+          ip: meta.ip,
+        });
+      }
+
+      // Consent ledger: wallet items used to pre-fill this submission.
+      if (candidateAccountId && sharedWalletItemIds.length > 0) {
+        await tx.insert(walletShares).values(
+          sharedWalletItemIds.map((walletItemId) => ({
+            candidateAccountId,
+            submissionId: submission.id,
+            walletItemId,
+            orgId: request.orgId,
+          })),
+        );
+      }
+
+      await tx
+        .update(deliveries)
+        .set({ status: "submitted", updatedAt: new Date() })
+        .where(eq(deliveries.accessTokenId, at.id));
+
+      return { alreadyDone: false as const, submissionId: submission.id, documentIds };
+    });
+
+    if (result.alreadyDone) {
+      // Objects were uploaded for a submission that another request already
+      // completed; clean them up.
+      await cleanupObjects(uploadedKeys);
+      return { ok: false, error: "This request has already been completed." };
+    }
+
+    // --- Phase 4: after commit — side effects that must not roll back writes. ---
+    await audit({
+      orgId: request.orgId,
+      actorType: candidateAccountId ? "candidate" : "link_responder",
+      actorId: candidateAccountId ?? at.id,
+      action: "submission.created",
+      targetType: "submission",
+      targetId: result.submissionId,
+      ...meta,
+    });
+
+    for (const documentId of result.documentIds) {
+      await sendEvent("document/uploaded", { documentId, table: "documents" });
+    }
+    await sendEvent("submission/received", { submissionId: result.submissionId });
+
+    const [org] = await db
+      .select()
+      .from(organisations)
+      .where(eq(organisations.id, request.orgId));
+    await sendSubmissionReceived({
+      to: at.recipientEmail,
+      org: await orgSender(request.orgId),
+      requestTitle: request.title,
+      retentionDays: org.retentionDays,
+    });
+
+    await clearLinkSession();
+    return { ok: true, id: result.submissionId };
+  } catch (err) {
+    // Compensation: the transaction rolled back, so remove any uploaded objects.
+    await cleanupObjects(uploadedKeys);
+    log.error({ err, accessTokenId: at.id }, "submitResponse failed");
+    return { ok: false, error: "Something went wrong saving your response. Please try again." };
+  }
+}
+
+async function cleanupObjects(keys: string[]): Promise<void> {
+  for (const key of keys) {
+    try {
+      await deleteObject(key);
+    } catch (err) {
+      log.error({ key, err }, "failed to clean up uploaded object");
+    }
+  }
 }

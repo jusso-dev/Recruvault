@@ -8,6 +8,15 @@ import { memberships, organisations, user } from "@/db/schema";
 import { requireOrgUser, getSession, requestMeta } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { ASSIGNABLE_ROLES, type OrgRole } from "@/lib/rbac";
+import {
+  createSendingDomain,
+  getSendingDomain,
+  removeSendingDomain,
+  verifySendingDomain,
+} from "@/lib/resend-domains";
+import { getLogger } from "@/lib/logger";
+
+const log = getLogger("org");
 
 export type ActionResult = { ok: boolean; error?: string; id?: string };
 
@@ -183,6 +192,25 @@ export async function updateOrgSettings(formData: FormData): Promise<ActionResul
     .from(organisations)
     .where(eq(organisations.id, ctx.orgId));
 
+  const domainChanged = sendingDomain !== org.sendingDomain;
+  let resendDomainId = org.resendDomainId;
+
+  // Register/clear the Resend domain when it changes (best-effort — a Resend
+  // failure must not block saving the other settings).
+  if (domainChanged && process.env.RESEND_API_KEY) {
+    try {
+      if (org.resendDomainId) await removeSendingDomain(org.resendDomainId);
+      resendDomainId = null;
+      if (sendingDomain) {
+        const created = await createSendingDomain(sendingDomain);
+        resendDomainId = created.id;
+      }
+    } catch (err) {
+      log.error({ err, orgId: ctx.orgId }, "resend domain registration failed");
+      return { ok: false, error: "Could not register the sending domain with Resend." };
+    }
+  }
+
   await db
     .update(organisations)
     .set({
@@ -190,13 +218,11 @@ export async function updateOrgSettings(formData: FormData): Promise<ActionResul
       purgeOnClose,
       branding: { ...org.branding, senderName: senderName || undefined },
       sendingDomain,
+      resendDomainId,
       sendingMode: sendingDomain ? "custom_domain" : "shared",
-      // Actual DNS verification (SPF/DKIM/DMARC via Resend) marks this; a
-      // changed domain always resets to unverified.
-      sendingDomainVerifiedAt:
-        sendingDomain && sendingDomain === org.sendingDomain
-          ? org.sendingDomainVerifiedAt
-          : null,
+      // Actual DNS verification (SPF/DKIM via Resend) marks this; a changed
+      // domain always resets to unverified.
+      sendingDomainVerifiedAt: domainChanged ? null : org.sendingDomainVerifiedAt,
     })
     .where(eq(organisations.id, ctx.orgId));
 
@@ -213,4 +239,53 @@ export async function updateOrgSettings(formData: FormData): Promise<ActionResul
 
   revalidatePath("/dashboard/settings");
   return { ok: true };
+}
+
+/**
+ * Ask Resend to (re)check the org's sending-domain DNS. When Resend reports the
+ * domain verified, stamp sendingDomainVerifiedAt so mail sends from it; a
+ * pending/failed status leaves the org on the shared domain.
+ */
+export async function verifyDomain(): Promise<ActionResult> {
+  const ctx = await requireOrgUser("retention:manage");
+
+  const [org] = await db
+    .select()
+    .from(organisations)
+    .where(eq(organisations.id, ctx.orgId));
+
+  if (!org.resendDomainId) {
+    return { ok: false, error: "No sending domain is registered." };
+  }
+
+  let verified = false;
+  try {
+    await verifySendingDomain(org.resendDomainId);
+    const status = await getSendingDomain(org.resendDomainId);
+    verified = status?.status === "verified";
+  } catch (err) {
+    log.error({ err, orgId: ctx.orgId }, "resend domain verify failed");
+    return { ok: false, error: "Could not reach Resend to verify the domain." };
+  }
+
+  await db
+    .update(organisations)
+    .set({ sendingDomainVerifiedAt: verified ? new Date() : null })
+    .where(eq(organisations.id, ctx.orgId));
+
+  const meta = await requestMeta();
+  await audit({
+    orgId: ctx.orgId,
+    actorType: "org_user",
+    actorId: ctx.userId,
+    action: "organisation.sending_domain_verified",
+    targetType: "organisation",
+    targetId: ctx.orgId,
+    ...meta,
+  });
+
+  revalidatePath("/dashboard/settings");
+  return verified
+    ? { ok: true }
+    : { ok: false, error: "DNS records are not in place yet. Add them and retry." };
 }

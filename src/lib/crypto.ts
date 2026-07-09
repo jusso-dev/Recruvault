@@ -33,6 +33,16 @@ function kmsClient() {
 }
 
 function localKek(): Buffer {
+  // Fail closed: the local KEK path must never run in production unless the
+  // operator has explicitly opted in (mirrors the env validation in env.ts).
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.ALLOW_LOCAL_KEK_IN_PRODUCTION !== "true"
+  ) {
+    throw new Error(
+      "Refusing to use LOCAL_KEK in production. Set KMS_KEY_ID, or opt in with ALLOW_LOCAL_KEK_IN_PRODUCTION=true.",
+    );
+  }
   const hex = process.env.LOCAL_KEK;
   if (!hex) {
     throw new Error(
@@ -97,13 +107,18 @@ async function unwrapDek(wrapped: string, source: string, dekId: string): Promis
   return aesDecrypt(localKek(), wrapped);
 }
 
-/** Create and register a new DEK. Returns its registry id and raw key. */
-export async function createDataKey(): Promise<{ dekId: string; dek: Buffer }> {
+/**
+ * Create and register a new DEK. Returns its registry id and raw key. Pass a
+ * transaction executor to enrol the DEK insert into a surrounding transaction.
+ */
+export async function createDataKey(
+  executor: Pick<typeof db, "insert"> = db,
+): Promise<{ dekId: string; dek: Buffer }> {
   const dek = randomBytes(32);
   // Generate the id up front so it can bind the wrapped key via EncryptionContext.
   const dekId = randomUUID();
   const { wrapped, source } = await wrapDek(dek, dekId);
-  await db.insert(dataKeys).values({ id: dekId, wrappedKey: wrapped, keySource: source });
+  await executor.insert(dataKeys).values({ id: dekId, wrappedKey: wrapped, keySource: source });
   return { dekId, dek };
 }
 
@@ -147,6 +162,31 @@ export async function encryptFieldWithKey(plaintext: string, dek: Buffer): Promi
 export async function decryptField(valueEncrypted: string, dekId: string): Promise<string> {
   const dek = await getDataKey(dekId);
   return aesDecrypt(dek, valueEncrypted).toString("utf8");
+}
+
+/** Decrypt a field value with an already-unwrapped DEK (no DB/KMS call). */
+export function decryptFieldWithKey(valueEncrypted: string, dek: Buffer): string {
+  return aesDecrypt(dek, valueEncrypted).toString("utf8");
+}
+
+/**
+ * Per-request memo of unwrapped DEKs. Submissions share one DEK per record, so
+ * this collapses N KMS Decrypt calls to one. Never module-global — plaintext
+ * DEKs must not outlive the request. Stores the promise to dedupe concurrent
+ * unwraps of the same key.
+ */
+export function createDekCache(): { getKey(dekId: string): Promise<Buffer> } {
+  const cache = new Map<string, Promise<Buffer>>();
+  return {
+    getKey(dekId: string): Promise<Buffer> {
+      let p = cache.get(dekId);
+      if (!p) {
+        p = getDataKey(dekId);
+        cache.set(dekId, p);
+      }
+      return p;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

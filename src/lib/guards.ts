@@ -44,6 +44,12 @@ export async function requireOrgUser(permission?: Permission): Promise<OrgContex
   if ((session.user as { accountType?: string }).accountType !== "org") {
     throw new AuthError("Organisation account required.");
   }
+  // Org accounts must verify their email before acting: createOrganisation and
+  // addMember trust the address for membership matching, so an unverified one
+  // must not be able to create orgs or send requests.
+  if (!(session.user as { emailVerified?: boolean }).emailVerified) {
+    throw new AuthError("Verify your email address before continuing.");
+  }
 
   const rows = await db
     .select({

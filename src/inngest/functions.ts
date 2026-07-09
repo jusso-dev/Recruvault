@@ -1,5 +1,5 @@
-import { and, eq, gt, isNull, lt } from "drizzle-orm";
-import { inngest } from "./client";
+import { and, eq, gt, inArray, isNull, lt } from "drizzle-orm";
+import { inngest, parseEvent } from "./client";
 import { db } from "@/db";
 import {
   accessTokens,
@@ -22,8 +22,10 @@ import { sendSms } from "@/lib/sms";
 import { getObjectBytes, deleteObject } from "@/lib/storage";
 import { scanBytes, sniffContentType } from "@/lib/scan";
 import { audit } from "@/lib/audit";
-import { runRetentionPurge } from "@/lib/retention";
+import { findPurgeDueSubmissionIds, purgeSubmission } from "@/lib/retention";
+import { getLogger } from "@/lib/logger";
 
+const log = getLogger("inngest");
 const APP_URL = () => process.env.APP_URL ?? "http://localhost:3000";
 const DEFAULT_LINK_TTL_DAYS = 14;
 
@@ -32,14 +34,40 @@ const DEFAULT_LINK_TTL_DAYS = 14;
  * (and optionally SMS) with Inngest handling retries and failures.
  */
 export const deliverRequest = inngest.createFunction(
-  { id: "deliver-request", retries: 3, triggers: [{ event: "request/send" }] },
+  {
+    id: "deliver-request",
+    retries: 3,
+    triggers: [{ event: "request/send" }],
+    onFailure: async ({ event, error }) => {
+      // Retries exhausted: mark the delivery failed so the recruiter isn't
+      // misled into thinking the candidate received the link.
+      const original = event.data.event.data;
+      await db
+        .update(deliveries)
+        .set({ status: "failed", updatedAt: new Date() })
+        .where(
+          and(
+            eq(deliveries.requestId, original.requestId),
+            eq(deliveries.recipient, original.recipientEmail.toLowerCase()),
+            inArray(deliveries.status, ["queued", "sent"]),
+          ),
+        );
+      const [req] = await db.select().from(requests).where(eq(requests.id, original.requestId));
+      await audit({
+        orgId: req?.orgId,
+        actorType: "system",
+        action: "delivery.failed",
+        targetType: "request",
+        targetId: original.requestId,
+      });
+      log.error({ err: error, requestId: original.requestId }, "request delivery permanently failed");
+    },
+  },
   async ({ event, step }) => {
-    const { requestId, recipientEmail, recipientPhone, sentBy } = event.data as {
-      requestId: string;
-      recipientEmail: string;
-      recipientPhone?: string;
-      sentBy: string;
-    };
+    const { requestId, recipientEmail, recipientPhone, sentBy } = parseEvent(
+      "request/send",
+      event.data,
+    );
 
     const prepared = await step.run("create-token", async () => {
       const [req] = await db.select().from(requests).where(eq(requests.id, requestId));
@@ -151,12 +179,27 @@ export const deliverRequest = inngest.createFunction(
  * real content type, run ClamAV, and quarantine anything that fails.
  */
 export const scanDocument = inngest.createFunction(
-  { id: "scan-document", retries: 2, triggers: [{ event: "document/uploaded" }] },
+  {
+    id: "scan-document",
+    retries: 2,
+    triggers: [{ event: "document/uploaded" }],
+    onFailure: async ({ event, error }) => {
+      // Retries exhausted (e.g. clamd unreachable): mark the document errored
+      // so it stays quarantined rather than stuck pending forever.
+      const { documentId, table } = event.data.event.data;
+      const tbl = table === "documents" ? documents : walletDocuments;
+      await db.update(tbl).set({ scanStatus: "error" }).where(eq(tbl.id, documentId));
+      await audit({
+        actorType: "system",
+        action: "document.scan.error",
+        targetType: table === "documents" ? "document" : "wallet_document",
+        targetId: documentId,
+      });
+      log.error({ err: error, documentId }, "document scan permanently failed");
+    },
+  },
   async ({ event, step }) => {
-    const { documentId, table } = event.data as {
-      documentId: string;
-      table: "documents" | "wallet_documents";
-    };
+    const { documentId, table } = parseEvent("document/uploaded", event.data);
 
     const result = await step.run("scan", async () => {
       const tbl = table === "documents" ? documents : walletDocuments;
@@ -203,10 +246,11 @@ export const submissionReceived = inngest.createFunction(
   { id: "submission-received", retries: 3, triggers: [{ event: "submission/received" }] },
   async ({ event, step }) => {
     await step.run("notify-recruiter", async () => {
+      const { submissionId } = parseEvent("submission/received", event.data);
       const [sub] = await db
         .select()
         .from(submissions)
-        .where(eq(submissions.id, (event.data as { submissionId: string }).submissionId));
+        .where(eq(submissions.id, submissionId));
       if (!sub) return;
       const [req] = await db.select().from(requests).where(eq(requests.id, sub.requestId));
       if (!req) return;
@@ -221,12 +265,51 @@ export const submissionReceived = inngest.createFunction(
   },
 );
 
-/** Daily retention purge across all organisations. */
+/**
+ * Daily retention sweep: collect all due submissions, then fan out one event
+ * per submission so a single failure is isolated, retried, and countable
+ * rather than aborting the whole run.
+ */
 export const retentionPurge = inngest.createFunction(
   { id: "retention-purge", triggers: [{ cron: "0 16 * * *" }] }, // 02:00 AEST
   async ({ step }) => {
-    const purged = await step.run("purge", () => runRetentionPurge());
-    return { purged };
+    const ids = await step.run("collect", () => findPurgeDueSubmissionIds());
+    if (ids.length > 0) {
+      await step.sendEvent(
+        "fan-out",
+        ids.map((submissionId) => ({
+          name: "retention/purge.submission" as const,
+          data: { submissionId },
+        })),
+      );
+    }
+    return { due: ids.length };
+  },
+);
+
+/** Purge a single submission (fanned out from the retention sweep). */
+export const purgeSubmissionJob = inngest.createFunction(
+  {
+    id: "purge-submission",
+    retries: 3,
+    triggers: [{ event: "retention/purge.submission" }],
+    onFailure: async ({ event, error }) => {
+      const { submissionId } = event.data.event.data;
+      await audit({
+        actorType: "system",
+        action: "submission.purge_failed",
+        targetType: "submission",
+        targetId: submissionId,
+      });
+      log.error({ err: error, submissionId }, "submission purge permanently failed");
+    },
+  },
+  async ({ event, step }) => {
+    const { submissionId } = parseEvent("retention/purge.submission", event.data);
+    await step.run("purge", () =>
+      purgeSubmission(submissionId, { actorType: "system" }),
+    );
+    return { submissionId };
   },
 );
 
@@ -234,9 +317,9 @@ export const retentionPurge = inngest.createFunction(
 export const expiryReminders = inngest.createFunction(
   { id: "expiry-reminders", triggers: [{ cron: "0 22 * * *" }] }, // 08:00 AEST
   async ({ step }) => {
-    const reminded = await step.run("remind", async () => {
-      const soon = new Date(Date.now() + 48 * 60 * 60 * 1000);
-      const due = await db
+    const soon = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    const due = await step.run("collect", async () =>
+      db
         .select({
           tokenId: accessTokens.id,
           email: accessTokens.recipientEmail,
@@ -247,21 +330,35 @@ export const expiryReminders = inngest.createFunction(
         .where(
           and(
             isNull(accessTokens.consumedAt),
+            isNull(accessTokens.revokedAt),
+            isNull(accessTokens.reminderSentAt),
             lt(accessTokens.expiresAt, soon),
             gt(accessTokens.expiresAt, new Date()),
           ),
-        );
+        ),
+    );
 
-      let count = 0;
-      for (const t of due) {
+    let count = 0;
+    // Each reminder is its own step so one bad address doesn't abort the rest,
+    // and completed sends are memoised across retries.
+    for (const t of due) {
+      const sent = await step.run(`remind-${t.tokenId}`, async () => {
         const [req] = await db.select().from(requests).where(eq(requests.id, t.requestId));
-        if (!req || req.status === "closed" || req.status === "archived") continue;
+        if (!req || req.status === "closed" || req.status === "archived") return false;
         const [org] = await db
           .select()
           .from(organisations)
           .where(eq(organisations.id, req.orgId));
-        // The original opaque token is unrecoverable by design (only its hash is
-        // stored), so the reminder directs the recipient back through the app.
+
+        // The original opaque token is unrecoverable (only its hash is stored),
+        // so rotate the token and send a fresh working link. The old link stops
+        // working — acceptable, as it was about to expire anyway.
+        const { token, tokenHash } = generateOpaqueToken();
+        await db
+          .update(accessTokens)
+          .set({ tokenHash, reminderSentAt: new Date() })
+          .where(eq(accessTokens.id, t.tokenId));
+
         await sendExpiryReminder({
           to: t.email,
           org: {
@@ -272,14 +369,21 @@ export const expiryReminders = inngest.createFunction(
             sendingDomainVerifiedAt: org.sendingDomainVerifiedAt,
           },
           requestTitle: req.title,
-          link: `${APP_URL()}`,
-          expiresAt: t.expiresAt,
+          link: `${APP_URL()}/r/${token}`,
+          expiresAt: new Date(t.expiresAt),
         });
-        count++;
-      }
-      return count;
-    });
-    return { reminded };
+        await audit({
+          orgId: req.orgId,
+          actorType: "system",
+          action: "link.reminder_sent",
+          targetType: "access_token",
+          targetId: t.tokenId,
+        });
+        return true;
+      });
+      if (sent) count++;
+    }
+    return { reminded: count };
   },
 );
 
@@ -288,11 +392,7 @@ export const emailEvents = inngest.createFunction(
   { id: "email-events", triggers: [{ event: "email/event" }] },
   async ({ event, step }) => {
     await step.run("handle", async () => {
-      const { type, email, messageId } = event.data as {
-        type: string;
-        email: string;
-        messageId?: string;
-      };
+      const { type, email, messageId } = parseEvent("email/event", event.data);
       if (type === "email.bounced" || type === "email.complained") {
         await db
           .insert(suppressions)
@@ -318,6 +418,7 @@ export const functions = [
   scanDocument,
   submissionReceived,
   retentionPurge,
+  purgeSubmissionJob,
   expiryReminders,
   emailEvents,
 ];

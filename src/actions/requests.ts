@@ -5,6 +5,8 @@ import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import {
+  accessTokens,
+  deliveries,
   documents,
   memberships,
   requestFields,
@@ -16,13 +18,9 @@ import {
 } from "@/db/schema";
 import { requireOrgUser, requestMeta } from "@/lib/guards";
 import { audit } from "@/lib/audit";
-import { inngest } from "@/inngest/client";
+import { sendEvent } from "@/inngest/client";
 import { newStorageKey, putObjectBytes } from "@/lib/storage";
-import {
-  fieldDefinition,
-  UPLOAD_ALLOWED_TYPES,
-  UPLOAD_MAX_BYTES,
-} from "@/lib/fields";
+import { fieldDefinition, UPLOAD_MAX_BYTES } from "@/lib/fields";
 import { sniffContentType } from "@/lib/scan";
 import type { ActionResult } from "./org";
 
@@ -82,10 +80,7 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
       })
       .returning({ id: documents.id });
     jdDocumentId = doc.id;
-    await inngest.send({
-      name: "document/uploaded",
-      data: { documentId: doc.id, table: "documents" },
-    });
+    await sendEvent("document/uploaded", { documentId: doc.id, table: "documents" });
   }
 
   const [request] = await db
@@ -155,6 +150,33 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
   return { ok: true, id: request.id };
 }
 
+/** Delete a saved request template. Tenant-scoped and gated by templates:manage. */
+export async function deleteTemplate(formData: FormData): Promise<ActionResult> {
+  const ctx = await requireOrgUser("templates:manage");
+  const templateId = String(formData.get("templateId") ?? "");
+  if (!templateId) return { ok: false, error: "Missing template id." };
+
+  const [deleted] = await db
+    .delete(requestTemplates)
+    .where(and(eq(requestTemplates.id, templateId), eq(requestTemplates.orgId, ctx.orgId)))
+    .returning({ id: requestTemplates.id });
+  if (!deleted) return { ok: false, error: "Template not found." };
+
+  const meta = await requestMeta();
+  await audit({
+    orgId: ctx.orgId,
+    actorType: "org_user",
+    actorId: ctx.userId,
+    action: "template.deleted",
+    targetType: "request_template",
+    targetId: templateId,
+    ...meta,
+  });
+
+  revalidatePath("/dashboard/requests/new");
+  return { ok: true };
+}
+
 /** Queue delivery of a secure link by email (and optionally SMS). */
 export async function sendRequest(formData: FormData): Promise<ActionResult> {
   const ctx = await requireOrgUser("requests:create");
@@ -189,12 +211,52 @@ export async function sendRequest(formData: FormData): Promise<ActionResult> {
     };
   }
 
-  await inngest.send({
-    name: "request/send",
-    data: { requestId, recipientEmail, recipientPhone, sentBy: ctx.userId },
+  await sendEvent("request/send", {
+    requestId,
+    recipientEmail,
+    recipientPhone,
+    sentBy: ctx.userId,
   });
 
   revalidatePath(`/dashboard/requests/${requestId}`);
+  return { ok: true };
+}
+
+/** Revoke a sent secure link before it expires or is used. */
+export async function revokeAccessToken(formData: FormData): Promise<ActionResult> {
+  const ctx = await requireOrgUser("requests:create");
+  const accessTokenId = String(formData.get("accessTokenId") ?? "");
+
+  const [row] = await db
+    .select({ id: accessTokens.id, consumedAt: accessTokens.consumedAt, revokedAt: accessTokens.revokedAt, requestId: accessTokens.requestId })
+    .from(accessTokens)
+    .innerJoin(requests, eq(requests.id, accessTokens.requestId))
+    .where(and(eq(accessTokens.id, accessTokenId), eq(requests.orgId, ctx.orgId)));
+  if (!row) return { ok: false, error: "Link not found." };
+  if (row.consumedAt) return { ok: false, error: "This link has already been completed." };
+  if (row.revokedAt) return { ok: false, error: "This link is already revoked." };
+
+  await db
+    .update(accessTokens)
+    .set({ revokedAt: new Date() })
+    .where(eq(accessTokens.id, accessTokenId));
+  await db
+    .update(deliveries)
+    .set({ status: "failed", updatedAt: new Date() })
+    .where(eq(deliveries.accessTokenId, accessTokenId));
+
+  const meta = await requestMeta();
+  await audit({
+    orgId: ctx.orgId,
+    actorType: "org_user",
+    actorId: ctx.userId,
+    action: "link.revoked",
+    targetType: "access_token",
+    targetId: accessTokenId,
+    ...meta,
+  });
+
+  revalidatePath(`/dashboard/requests/${row.requestId}`);
   return { ok: true };
 }
 

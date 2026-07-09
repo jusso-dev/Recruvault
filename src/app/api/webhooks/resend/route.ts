@@ -1,6 +1,6 @@
-import { createHmac, timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { inngest } from "@/inngest/client";
+import { sendEvent } from "@/inngest/client";
+import { verifySvixSignature } from "@/lib/svix";
 
 /**
  * Resend webhook receiver (svix-signed). Bounce and complaint events flow
@@ -8,31 +8,15 @@ import { inngest } from "@/inngest/client";
  */
 
 function verifySvix(req: NextRequest, payload: string): boolean {
-  const secret = process.env.RESEND_WEBHOOK_SECRET;
-  // Fail closed: without a configured secret we cannot verify the signature,
-  // so reject rather than trust unsigned payloads (they mutate suppression).
-  if (!secret) return false;
-
-  const id = req.headers.get("svix-id");
-  const timestamp = req.headers.get("svix-timestamp");
-  const signatures = req.headers.get("svix-signature");
-  if (!id || !timestamp || !signatures) return false;
-
-  // Reject stale timestamps (5 minute tolerance).
-  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) return false;
-
-  const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
-  const expected = createHmac("sha256", key)
-    .update(`${id}.${timestamp}.${payload}`)
-    .digest("base64");
-
-  return signatures.split(" ").some((part) => {
-    const sig = part.split(",")[1];
-    if (!sig) return false;
-    const a = Buffer.from(sig);
-    const b = Buffer.from(expected);
-    return a.length === b.length && timingSafeEqual(a, b);
-  });
+  return verifySvixSignature(
+    process.env.RESEND_WEBHOOK_SECRET,
+    {
+      id: req.headers.get("svix-id"),
+      timestamp: req.headers.get("svix-timestamp"),
+      signature: req.headers.get("svix-signature"),
+    },
+    payload,
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -48,9 +32,10 @@ export async function POST(req: NextRequest) {
 
   const to = Array.isArray(body.data?.to) ? body.data?.to[0] : body.data?.to;
   if (to) {
-    await inngest.send({
-      name: "email/event",
-      data: { type: body.type, email: to, messageId: body.data?.email_id },
+    await sendEvent("email/event", {
+      type: body.type,
+      email: to,
+      messageId: body.data?.email_id,
     });
   }
 

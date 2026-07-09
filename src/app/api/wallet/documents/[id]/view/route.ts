@@ -47,6 +47,7 @@ export async function GET(
       "Content-Disposition": `inline; filename="${doc.fileName}"`,
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; object-src 'none'; frame-ancestors 'self'",
     },
   });
 }

@@ -17,6 +17,9 @@ import {
 import { shredDataKey } from "@/lib/crypto";
 import { deleteObject } from "@/lib/storage";
 import { audit } from "@/lib/audit";
+import { getLogger } from "@/lib/logger";
+
+const log = getLogger("retention");
 
 /**
  * Retention and deletion.
@@ -64,7 +67,7 @@ export async function purgeSubmission(
     try {
       await deleteObject(d.storageKey);
     } catch (err) {
-      console.error(`Failed to delete object ${d.storageKey}:`, err);
+      log.error({ storageKey: d.storageKey, err }, "storage object delete failed");
     }
   }
 
@@ -78,10 +81,14 @@ export async function purgeSubmission(
   });
 }
 
-/** Scheduled purge: enforce each organisation's retention policy. */
-export async function runRetentionPurge(): Promise<number> {
-  let purged = 0;
+/**
+ * Select submission ids due for purge across all organisations, per each org's
+ * retention policy. The scheduled job fans these out so a single poisoned
+ * submission can't abort the rest of the run.
+ */
+export async function findPurgeDueSubmissionIds(): Promise<string[]> {
   const orgs = await db.select().from(organisations);
+  const ids: string[] = [];
 
   for (const org of orgs) {
     const cutoff = new Date(Date.now() - org.retentionDays * 24 * 60 * 60 * 1000);
@@ -100,12 +107,18 @@ export async function runRetentionPurge(): Promise<number> {
         ),
       );
 
-    for (const s of due) {
-      await purgeSubmission(s.id, { actorType: "system" });
-      purged++;
-    }
+    ids.push(...due.map((s) => s.id));
   }
-  return purged;
+  return ids;
+}
+
+/** Enforce retention synchronously (used by tests / CLI). */
+export async function runRetentionPurge(): Promise<number> {
+  const ids = await findPurgeDueSubmissionIds();
+  for (const id of ids) {
+    await purgeSubmission(id, { actorType: "system" });
+  }
+  return ids.length;
 }
 
 /**
@@ -135,7 +148,7 @@ export async function eraseCandidate(candidateAccountId: string): Promise<void> 
     try {
       await deleteObject(doc.storageKey);
     } catch (err) {
-      console.error(`Failed to delete object ${doc.storageKey}:`, err);
+      log.error({ storageKey: doc.storageKey, err }, "storage object delete failed");
     }
   }
 

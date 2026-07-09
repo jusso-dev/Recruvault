@@ -11,9 +11,10 @@ import {
 } from "@/db/schema";
 import { requireOrgUser, requestMeta, AuthError } from "@/lib/guards";
 import { readLinkSession } from "@/lib/link-session";
-import { getObjectStream } from "@/lib/storage";
+import { getObjectStream, getObjectBytes } from "@/lib/storage";
 import { audit } from "@/lib/audit";
 import { can } from "@/lib/rbac";
+import { watermarkPdf } from "@/lib/watermark";
 
 /**
  * Authorised document streaming. There are no public URLs: every render goes
@@ -40,6 +41,8 @@ export async function GET(
 
   let authorised = false;
   let allowDownload = false;
+  // Identity burned into the watermark on view-only renders, for traceability.
+  let viewerLabel = "";
 
   // --- Organisation-side access ---
   try {
@@ -48,6 +51,7 @@ export async function GET(
       if (can(ctx.role, "documents:view")) {
         authorised = true;
         allowDownload = can(ctx.role, "export:documents");
+        viewerLabel = ctx.userEmail;
       } else if (ctx.role === "reviewer") {
         // Reviewers see documents only on submissions shared with them.
         const [shared] = await db
@@ -89,7 +93,7 @@ export async function GET(
         .select()
         .from(accessTokens)
         .where(eq(accessTokens.id, accessTokenId));
-      if (at && at.verifiedAt && at.expiresAt > new Date()) {
+      if (at && at.verifiedAt && !at.revokedAt && at.expiresAt > new Date()) {
         const [request] = await db
           .select()
           .from(requests)
@@ -98,6 +102,7 @@ export async function GET(
         const isNda = request?.ndaDocumentId === doc.id;
         if (request && (isJd || isNda)) {
           authorised = true;
+          viewerLabel = at.recipientEmail;
           // NDA and JD have independent view modes.
           const viewMode = isNda ? request.ndaViewMode : request.jdViewMode;
           allowDownload = viewMode === "allow_download";
@@ -123,7 +128,10 @@ export async function GET(
                 eq(submissions.accessTokenId, at.id),
               ),
             );
-          if (own) authorised = true;
+          if (own) {
+            authorised = true;
+            viewerLabel = at.recipientEmail;
+          }
         }
       }
     }
@@ -134,6 +142,31 @@ export async function GET(
     return NextResponse.json({ error: "Download is not permitted" }, { status: 403 });
   }
 
+  const commonHeaders = {
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+    // Allow same-origin embedding (the responder/review pages) while blocking
+    // cross-origin framing and any active content in the document itself.
+    "Content-Security-Policy": "default-src 'none'; object-src 'none'; frame-ancestors 'self'",
+  };
+
+  // View-only render: burn a per-viewer watermark into the PDF so the served
+  // bytes can't yield a clean copy. A permitted download serves the original
+  // (the sanctioned clean copy). Non-PDFs stream as-is.
+  const isPdf = doc.contentType === "application/pdf";
+  if (!wantsDownload && doc.watermarkRequired && isPdf) {
+    const original = await getObjectBytes(doc.storageKey);
+    const label = `Recruvault · ${viewerLabel || "authorised viewer"} · ${new Date().toISOString()} · Confidential`;
+    const stamped = await watermarkPdf(original, label);
+    return new NextResponse(stamped as unknown as BodyInit, {
+      headers: {
+        ...commonHeaders,
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `inline; filename="${doc.fileName}"`,
+      },
+    });
+  }
+
   const obj = await getObjectStream(doc.storageKey);
   const disposition = wantsDownload
     ? `attachment; filename="${doc.fileName}"`
@@ -141,10 +174,9 @@ export async function GET(
 
   return new NextResponse(obj.body as unknown as ReadableStream, {
     headers: {
+      ...commonHeaders,
       "Content-Type": doc.contentType,
       "Content-Disposition": disposition,
-      "Cache-Control": "private, no-store",
-      "X-Content-Type-Options": "nosniff",
     },
   });
 }
