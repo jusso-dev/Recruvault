@@ -2,8 +2,9 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { memberships, organisations, user } from "@/db/schema";
 import { requireOrgUser } from "@/lib/guards";
-import { addMember, removeMember, updateMemberRole, updateOrgSettings } from "@/actions/org";
+import { addMember, removeMember, updateMemberRole, updateOrgSettings, verifyDomain } from "@/actions/org";
 import { ASSIGNABLE_ROLES } from "@/lib/rbac";
+import { domainsEnabled, getSendingDomain } from "@/lib/resend-domains";
 import { ActionForm } from "@/components/action-form";
 import {
   Badge,
@@ -24,6 +25,13 @@ export default async function SettingsPage() {
     .select()
     .from(organisations)
     .where(eq(organisations.id, ctx.orgId));
+
+  // When a custom domain is registered but unverified, fetch its DNS records
+  // from Resend so the admin can copy them into their zone.
+  const dns =
+    org.sendingDomain && !org.sendingDomainVerifiedAt && org.resendDomainId && domainsEnabled()
+      ? await getSendingDomain(org.resendDomainId)
+      : null;
 
   const members = await db
     .select({
@@ -95,6 +103,45 @@ export default async function SettingsPage() {
             </div>
             <Button type="submit">Save settings</Button>
           </ActionForm>
+
+          {dns && dns.records.length > 0 && (
+            <div className="mt-4 space-y-3 border-t border-zinc-100 pt-4">
+              <p className="text-sm font-medium">
+                Add these DNS records to {org.sendingDomain}, then verify
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="text-zinc-500">
+                    <tr>
+                      <th className="py-1 pr-3">Type</th>
+                      <th className="py-1 pr-3">Name</th>
+                      <th className="py-1 pr-3">Value</th>
+                      <th className="py-1">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="font-mono">
+                    {dns.records.map((r, i) => (
+                      <tr key={i} className="border-t border-zinc-100 align-top">
+                        <td className="py-1 pr-3">{r.type}</td>
+                        <td className="py-1 pr-3 break-all">{r.name}</td>
+                        <td className="py-1 pr-3 break-all">{r.value}</td>
+                        <td className="py-1">
+                          <Badge variant={r.status === "verified" ? "green" : "default"}>
+                            {r.status}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <ActionForm action={verifyDomain} successMessage="Sending domain verified.">
+                <Button type="submit" variant="secondary" size="sm">
+                  Verify DNS now
+                </Button>
+              </ActionForm>
+            </div>
+          )}
         </CardContent>
       </Card>
 
