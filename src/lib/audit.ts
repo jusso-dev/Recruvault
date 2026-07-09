@@ -38,7 +38,8 @@ interface HashableEvent {
   targetId?: string | null;
 }
 
-function eventHash(prevHash: string, seq: number, e: HashableEvent, at: string): string {
+/** Exported for tests — the canonical per-event hash over content + linkage. */
+export function eventHash(prevHash: string, seq: number, e: HashableEvent, at: string): string {
   const canonical = JSON.stringify({
     prevHash,
     seq,
@@ -53,7 +54,7 @@ function eventHash(prevHash: string, seq: number, e: HashableEvent, at: string):
   return createHash("sha256").update(canonical).digest("hex");
 }
 
-const GENESIS = "0".repeat(64);
+export const GENESIS = "0".repeat(64);
 
 export async function audit(e: AuditInput): Promise<void> {
   await db.transaction(async (tx) => {
