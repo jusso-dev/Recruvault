@@ -5,6 +5,7 @@ import {
   timestamp,
   boolean,
   integer,
+  bigint,
   jsonb,
   uuid,
   index,
@@ -192,6 +193,8 @@ export const organisations = pgTable("organisations", {
   sendingMode: sendingMode("sending_mode").notNull().default("shared"),
   sendingDomain: text("sending_domain"),
   sendingDomainVerifiedAt: timestamp("sending_domain_verified_at"),
+  // Resend Domains API id for the custom sending domain (DNS verification).
+  resendDomainId: text("resend_domain_id"),
   // Days after submission before automatic purge. Enforced by the retention job.
   retentionDays: integer("retention_days").notNull().default(90),
   purgeOnClose: boolean("purge_on_close").notNull().default(false),
@@ -490,9 +493,16 @@ export const accessTokens = pgTable(
     otpLastSentAt: timestamp("otp_last_sent_at"),
     verifiedAt: timestamp("verified_at"),
     consumedAt: timestamp("consumed_at"),
+    // Recruiter-initiated revocation of a sent link.
+    revokedAt: timestamp("revoked_at"),
+    // Set once an expiry reminder has been sent, to avoid duplicates.
+    reminderSentAt: timestamp("reminder_sent_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (t) => [index("access_tokens_request_idx").on(t.requestId)],
+  (t) => [
+    index("access_tokens_request_idx").on(t.requestId),
+    index("access_tokens_expires_idx").on(t.expiresAt),
+  ],
 );
 
 export const deliveries = pgTable(
@@ -512,7 +522,10 @@ export const deliveries = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (t) => [index("deliveries_request_idx").on(t.requestId)],
+  (t) => [
+    index("deliveries_request_idx").on(t.requestId),
+    index("deliveries_access_token_idx").on(t.accessTokenId),
+  ],
 );
 
 // Hard-bounced or complained addresses are suppressed from future sends.
@@ -604,3 +617,31 @@ export const auditEvents = pgTable(
     index("audit_events_target_idx").on(t.targetType, t.targetId),
   ],
 );
+
+// Incremental verification checkpoint per audit chain: "verified up to seq N
+// (whose hash is H) at least once". Lets the audit page verify only new rows.
+export const auditChainCheckpoints = pgTable("audit_chain_checkpoints", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // Org id as text, or "global" for the candidate-side chain (avoids the
+  // Postgres unique-null problem on a nullable orgId).
+  chainScope: text("chain_scope").notNull().unique(),
+  verifiedThroughSeq: integer("verified_through_seq").notNull(),
+  hash: text("hash").notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// BetterAuth database-backed rate limiting (shape required by better-auth).
+export const rateLimit = pgTable("rate_limit", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull(),
+  count: integer("count").notNull(),
+  lastRequest: bigint("last_request", { mode: "number" }).notNull(),
+});
+
+// IP-keyed fixed-window limiter for the link/OTP endpoints (DB-backed so it
+// works across app instances).
+export const linkRateLimits = pgTable("link_rate_limits", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull().default(0),
+  windowStart: timestamp("window_start").notNull().defaultNow(),
+});
