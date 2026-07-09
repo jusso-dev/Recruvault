@@ -24,6 +24,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Close the pg pool before killing the container, otherwise idle
+  // connections surface as a FATAL 57P01 "terminating connection" unhandled
+  // error when Postgres shuts down under them.
+  const { db } = await import("@/db");
+  await (db.$client as { end: () => Promise<void> }).end();
   await container?.stop();
 });
 
