@@ -19,7 +19,7 @@ This is a passion project: public, MIT-licensed, and self-hostable by anyone. Is
 
 ## Stack
 
-Next.js (App Router) · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/KMS/SNS (or MinIO) · ClamAV · Docker Compose.
+Next.js 16 (App Router) · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/KMS/SNS (or MinIO) · ClamAV · Docker Compose.
 
 ## Local development
 
