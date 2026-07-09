@@ -1,5 +1,8 @@
 import "server-only";
 import { Socket } from "net";
+import { getLogger } from "@/lib/logger";
+
+const log = getLogger("scan");
 
 /**
  * Virus scanning via a ClamAV clamd daemon (INSTREAM protocol). Uploaded
@@ -16,7 +19,7 @@ export async function scanBytes(bytes: Buffer): Promise<ScanResult> {
     if (process.env.NODE_ENV === "production") {
       throw new Error("SCAN_DISABLED must not be set in production.");
     }
-    console.warn("[scan] SCAN_DISABLED=true — marking clean without scanning (dev only)");
+    log.warn("SCAN_DISABLED=true — marking clean without scanning (dev only)");
     return "clean";
   }
 

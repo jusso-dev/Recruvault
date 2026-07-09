@@ -14,6 +14,8 @@ services:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
       LOCAL_KEK: ${LOCAL_KEK:-}
       KMS_KEY_ID: ${KMS_KEY_ID:-}
+      # KMS-less self-host runs in production mode; opt into the local KEK here.
+      ALLOW_LOCAL_KEK_IN_PRODUCTION: ${ALLOW_LOCAL_KEK_IN_PRODUCTION:-}
       AWS_REGION: ${AWS_REGION:-ap-southeast-2}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-recruvault}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-recruvault-secret}

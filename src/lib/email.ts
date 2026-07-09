@@ -3,6 +3,9 @@ import { Resend } from "resend";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { suppressions } from "@/db/schema";
+import { getLogger } from "@/lib/logger";
+
+const log = getLogger("email");
 
 /**
  * Transactional email via Resend.
@@ -108,7 +111,10 @@ export async function sendEmail(c: EmailContent): Promise<string | null> {
   if (await isSuppressed(c.to)) return null;
   if (!process.env.RESEND_API_KEY) {
     // Dev fallback: log instead of failing hard so local flows keep working.
-    console.warn(`[email:dev] to=${c.to} subject="${c.subject}"${c.code ? ` code=${c.code}` : ""}${c.ctaUrl ? ` url=${c.ctaUrl}` : ""}`);
+    log.info(
+      { to: c.to, subject: c.subject, code: c.code, url: c.ctaUrl },
+      "email (dev fallback, not sent)",
+    );
     return null;
   }
   const { data, error } = await client().emails.send({

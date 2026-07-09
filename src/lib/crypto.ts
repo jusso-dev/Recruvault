@@ -33,6 +33,16 @@ function kmsClient() {
 }
 
 function localKek(): Buffer {
+  // Fail closed: the local KEK path must never run in production unless the
+  // operator has explicitly opted in (mirrors the env validation in env.ts).
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.ALLOW_LOCAL_KEK_IN_PRODUCTION !== "true"
+  ) {
+    throw new Error(
+      "Refusing to use LOCAL_KEK in production. Set KMS_KEY_ID, or opt in with ALLOW_LOCAL_KEK_IN_PRODUCTION=true.",
+    );
+  }
   const hex = process.env.LOCAL_KEK;
   if (!hex) {
     throw new Error(

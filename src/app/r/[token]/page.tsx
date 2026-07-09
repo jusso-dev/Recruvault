@@ -5,6 +5,16 @@ import { sha256 } from "@/lib/crypto";
 import { Card, CardContent } from "@/components/ui";
 import { OtpVerify } from "./otp-verify";
 
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-zinc-50 p-4">
+      <Card className="w-full max-w-md">
+        <CardContent>{children}</CardContent>
+      </Card>
+    </main>
+  );
+}
+
 /**
  * Secure link entry point. The token in the URL is opaque and single-purpose;
  * only its hash is stored. Before anything is shown, the responder must pass
@@ -22,16 +32,6 @@ export default async function SecureLinkPage({
     .select()
     .from(accessTokens)
     .where(eq(accessTokens.tokenHash, sha256(token)));
-
-  function Shell({ children }: { children: React.ReactNode }) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-zinc-50 p-4">
-        <Card className="w-full max-w-md">
-          <CardContent>{children}</CardContent>
-        </Card>
-      </main>
-    );
-  }
 
   if (!at) {
     return (

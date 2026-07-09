@@ -17,6 +17,9 @@ import {
 import { shredDataKey } from "@/lib/crypto";
 import { deleteObject } from "@/lib/storage";
 import { audit } from "@/lib/audit";
+import { getLogger } from "@/lib/logger";
+
+const log = getLogger("retention");
 
 /**
  * Retention and deletion.
@@ -64,7 +67,7 @@ export async function purgeSubmission(
     try {
       await deleteObject(d.storageKey);
     } catch (err) {
-      console.error(`Failed to delete object ${d.storageKey}:`, err);
+      log.error({ storageKey: d.storageKey, err }, "storage object delete failed");
     }
   }
 
@@ -135,7 +138,7 @@ export async function eraseCandidate(candidateAccountId: string): Promise<void> 
     try {
       await deleteObject(doc.storageKey);
     } catch (err) {
-      console.error(`Failed to delete object ${doc.storageKey}:`, err);
+      log.error({ storageKey: doc.storageKey, err }, "storage object delete failed");
     }
   }
 

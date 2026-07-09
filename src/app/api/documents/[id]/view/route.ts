@@ -145,6 +145,9 @@ export async function GET(
       "Content-Disposition": disposition,
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff",
+      // Allow same-origin embedding (the responder/review pages) while blocking
+      // cross-origin framing and any active content in the document itself.
+      "Content-Security-Policy": "default-src 'none'; object-src 'none'; frame-ancestors 'self'",
     },
   });
 }
