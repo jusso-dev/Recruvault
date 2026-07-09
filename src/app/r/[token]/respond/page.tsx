@@ -50,7 +50,7 @@ export default async function RespondPage({
   if (!at || !sessionTokenId || sessionTokenId !== at.id || !at.verifiedAt) {
     redirect(`/r/${token}`);
   }
-  if (at.consumedAt || at.expiresAt < new Date()) redirect(`/r/${token}`);
+  if (at.consumedAt || at.revokedAt || at.expiresAt < new Date()) redirect(`/r/${token}`);
 
   const [request] = await db.select().from(requests).where(eq(requests.id, at.requestId));
   const [org] = await db

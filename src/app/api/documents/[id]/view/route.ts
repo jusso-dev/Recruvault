@@ -89,7 +89,7 @@ export async function GET(
         .select()
         .from(accessTokens)
         .where(eq(accessTokens.id, accessTokenId));
-      if (at && at.verifiedAt && at.expiresAt > new Date()) {
+      if (at && at.verifiedAt && !at.revokedAt && at.expiresAt > new Date()) {
         const [request] = await db
           .select()
           .from(requests)

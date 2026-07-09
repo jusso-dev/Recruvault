@@ -5,6 +5,8 @@ import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import {
+  accessTokens,
+  deliveries,
   documents,
   memberships,
   requestFields,
@@ -190,6 +192,44 @@ export async function sendRequest(formData: FormData): Promise<ActionResult> {
   });
 
   revalidatePath(`/dashboard/requests/${requestId}`);
+  return { ok: true };
+}
+
+/** Revoke a sent secure link before it expires or is used. */
+export async function revokeAccessToken(formData: FormData): Promise<ActionResult> {
+  const ctx = await requireOrgUser("requests:create");
+  const accessTokenId = String(formData.get("accessTokenId") ?? "");
+
+  const [row] = await db
+    .select({ id: accessTokens.id, consumedAt: accessTokens.consumedAt, revokedAt: accessTokens.revokedAt, requestId: accessTokens.requestId })
+    .from(accessTokens)
+    .innerJoin(requests, eq(requests.id, accessTokens.requestId))
+    .where(and(eq(accessTokens.id, accessTokenId), eq(requests.orgId, ctx.orgId)));
+  if (!row) return { ok: false, error: "Link not found." };
+  if (row.consumedAt) return { ok: false, error: "This link has already been completed." };
+  if (row.revokedAt) return { ok: false, error: "This link is already revoked." };
+
+  await db
+    .update(accessTokens)
+    .set({ revokedAt: new Date() })
+    .where(eq(accessTokens.id, accessTokenId));
+  await db
+    .update(deliveries)
+    .set({ status: "failed", updatedAt: new Date() })
+    .where(eq(deliveries.accessTokenId, accessTokenId));
+
+  const meta = await requestMeta();
+  await audit({
+    orgId: ctx.orgId,
+    actorType: "org_user",
+    actorId: ctx.userId,
+    action: "link.revoked",
+    targetType: "access_token",
+    targetId: accessTokenId,
+    ...meta,
+  });
+
+  revalidatePath(`/dashboard/requests/${row.requestId}`);
   return { ok: true };
 }
 

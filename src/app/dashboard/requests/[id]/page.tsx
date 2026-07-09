@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { deliveries, requestFields, requests, submissions } from "@/db/schema";
+import { accessTokens, deliveries, requestFields, requests, submissions } from "@/db/schema";
 import { requireOrgUser } from "@/lib/guards";
 import { can } from "@/lib/rbac";
-import { sendRequest, setRequestStatus } from "@/actions/requests";
+import { revokeAccessToken, sendRequest, setRequestStatus } from "@/actions/requests";
 import { ActionForm } from "@/components/action-form";
 import {
   Badge,
@@ -55,6 +55,19 @@ export default async function RequestDetailPage({
     .from(deliveries)
     .where(eq(deliveries.requestId, id))
     .orderBy(desc(deliveries.createdAt));
+
+  const tokenIds = [...new Set(dels.map((d) => d.accessTokenId))];
+  const tokens = tokenIds.length
+    ? await db
+        .select({
+          id: accessTokens.id,
+          revokedAt: accessTokens.revokedAt,
+          consumedAt: accessTokens.consumedAt,
+        })
+        .from(accessTokens)
+        .where(inArray(accessTokens.id, tokenIds))
+    : [];
+  const tokenState = new Map(tokens.map((t) => [t.id, t]));
 
   const canSend = can(ctx.role, "requests:create");
   const canExport = can(ctx.role, "export:data");
@@ -160,14 +173,34 @@ export default async function RequestDetailPage({
             <p className="text-sm text-zinc-500">Nothing sent yet.</p>
           ) : (
             <ul className="divide-y divide-zinc-100 text-sm">
-              {dels.map((d) => (
-                <li key={d.id} className="flex items-center justify-between py-2">
-                  <span>
-                    {d.recipient} <span className="text-zinc-400">({d.channel})</span>
-                  </span>
-                  <Badge variant={statusBadgeVariant(d.status)}>{d.status}</Badge>
-                </li>
-              ))}
+              {dels.map((d) => {
+                const tok = tokenState.get(d.accessTokenId);
+                const revoked = !!tok?.revokedAt;
+                const canRevoke =
+                  canSend && d.channel === "email" && !revoked && !tok?.consumedAt;
+                return (
+                  <li key={d.id} className="flex items-center justify-between gap-2 py-2">
+                    <span>
+                      {d.recipient} <span className="text-zinc-400">({d.channel})</span>
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {revoked ? (
+                        <Badge variant="red">revoked</Badge>
+                      ) : (
+                        <Badge variant={statusBadgeVariant(d.status)}>{d.status}</Badge>
+                      )}
+                      {canRevoke && (
+                        <ActionForm action={revokeAccessToken}>
+                          <input type="hidden" name="accessTokenId" value={d.accessTokenId} />
+                          <Button type="submit" variant="secondary" size="sm">
+                            Revoke
+                          </Button>
+                        </ActionForm>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </CardContent>

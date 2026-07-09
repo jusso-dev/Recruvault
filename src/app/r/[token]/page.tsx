@@ -43,6 +43,17 @@ export default async function SecureLinkPage({
       </Shell>
     );
   }
+  if (at.revokedAt) {
+    return (
+      <Shell>
+        <h1 className="text-lg font-semibold">This link is no longer active</h1>
+        <p className="mt-2 text-sm text-zinc-600">
+          The sender has revoked this secure link. Contact the recruiter who sent it if
+          you still need to respond.
+        </p>
+      </Shell>
+    );
+  }
   if (at.consumedAt) {
     return (
       <Shell>

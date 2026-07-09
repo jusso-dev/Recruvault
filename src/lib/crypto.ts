@@ -107,13 +107,18 @@ async function unwrapDek(wrapped: string, source: string, dekId: string): Promis
   return aesDecrypt(localKek(), wrapped);
 }
 
-/** Create and register a new DEK. Returns its registry id and raw key. */
-export async function createDataKey(): Promise<{ dekId: string; dek: Buffer }> {
+/**
+ * Create and register a new DEK. Returns its registry id and raw key. Pass a
+ * transaction executor to enrol the DEK insert into a surrounding transaction.
+ */
+export async function createDataKey(
+  executor: Pick<typeof db, "insert"> = db,
+): Promise<{ dekId: string; dek: Buffer }> {
   const dek = randomBytes(32);
   // Generate the id up front so it can bind the wrapped key via EncryptionContext.
   const dekId = randomUUID();
   const { wrapped, source } = await wrapDek(dek, dekId);
-  await db.insert(dataKeys).values({ id: dekId, wrappedKey: wrapped, keySource: source });
+  await executor.insert(dataKeys).values({ id: dekId, wrappedKey: wrapped, keySource: source });
   return { dekId, dek };
 }
 
