@@ -34,12 +34,27 @@ services:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:-}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       clamav:
-        condition: service_started
-      minio:
-        condition: service_started
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  # One-shot: apply drizzle migrations, then exit. The app waits for this to
+  # complete so it never starts against an unmigrated database.
+  migrate:
+    build:
+      context: .
+      target: migrate
+    environment:
+      DATABASE_URL: postgres://recruvault:recruvault@db:5432/recruvault
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
 
   db:
     image: postgres:17-alpine
@@ -61,6 +76,14 @@ services:
     image: clamav/clamav:latest
     volumes:
       - clamav-data:/var/lib/clamav
+    healthcheck:
+      # clamdcheck.sh pings clamd on TCP 3310; non-zero until the daemon has
+      # finished loading signatures (can take minutes on first boot).
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
 
   minio:
     image: minio/minio:latest
@@ -73,6 +96,26 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+
+  # One-shot: wait for MinIO, then create the documents bucket if missing.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_USER: ${AWS_ACCESS_KEY_ID:-recruvault}
+      MINIO_PASS: ${AWS_SECRET_ACCESS_KEY:-recruvault-secret}
+      S3_BUCKET: ${S3_BUCKET:-recruvault-documents}
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 \"$$MINIO_USER\" \"$$MINIO_PASS\"; do
+        echo 'waiting for minio...'; sleep 2;
+      done;
+      mc mb --ignore-existing local/\"$$S3_BUCKET\";
+      echo 'minio bucket ready';
+      "
+    restart: "no"
 
   # Inngest dev server: runs the async jobs (delivery, scanning, expiry
   # reminders, retention purge). For production, use Inngest Cloud instead

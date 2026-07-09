@@ -49,7 +49,9 @@ Without `RESEND_API_KEY`, emails (secure links, OTP codes) are logged to the dev
 
 ## Self-hosting
 
-`docker compose up` builds the app and runs PostgreSQL, ClamAV, and MinIO (S3-compatible), so a deployment can be fully self-contained — no AWS account required. If you prefer AWS, point the S3/KMS env vars at real services (ap-southeast-2 keeps data resident in Australia).
+`docker compose up` builds the app and runs PostgreSQL, ClamAV, and MinIO (S3-compatible), so a deployment can be fully self-contained — no AWS account required. On startup a one-shot `migrate` service applies the database migrations and a `minio-init` service creates the documents bucket, and the app waits for both plus a healthy ClamAV before booting — so a fresh `docker compose up` yields a working stack with no manual steps. ClamAV's first boot takes a few minutes to load signatures; the healthcheck accounts for this.
+
+Set `BETTER_AUTH_SECRET` (required) and, for the KMS-less local-KEK path, `LOCAL_KEK` (32 bytes of hex) with `ALLOW_LOCAL_KEK_IN_PRODUCTION=true`. If you prefer AWS, point the S3/KMS env vars at real services (ap-southeast-2 keeps data resident in Australia).
 
 ## Security posture
 
