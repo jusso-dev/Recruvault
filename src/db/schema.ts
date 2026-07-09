@@ -404,7 +404,11 @@ export const submissions = pgTable(
     purgedAt: timestamp("purged_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (t) => [index("submissions_request_idx").on(t.requestId)],
+  (t) => [
+    index("submissions_request_idx").on(t.requestId),
+    index("submissions_candidate_idx").on(t.candidateAccountId),
+    index("submissions_access_token_idx").on(t.accessTokenId),
+  ],
 );
 
 export const submissionValues = pgTable(
@@ -425,18 +429,22 @@ export const submissionValues = pgTable(
   (t) => [uniqueIndex("submission_values_unique_idx").on(t.submissionId, t.fieldId)],
 );
 
-export const submissionDocuments = pgTable("submission_documents", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  submissionId: uuid("submission_id")
-    .notNull()
-    .references(() => submissions.id, { onDelete: "cascade" }),
-  fieldId: uuid("field_id")
-    .notNull()
-    .references(() => requestFields.id, { onDelete: "cascade" }),
-  documentId: uuid("document_id")
-    .notNull()
-    .references(() => documents.id),
-});
+export const submissionDocuments = pgTable(
+  "submission_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    submissionId: uuid("submission_id")
+      .notNull()
+      .references(() => submissions.id, { onDelete: "cascade" }),
+    fieldId: uuid("field_id")
+      .notNull()
+      .references(() => requestFields.id, { onDelete: "cascade" }),
+    documentId: uuid("document_id")
+      .notNull()
+      .references(() => documents.id),
+  },
+  (t) => [index("submission_documents_submission_idx").on(t.submissionId)],
+);
 
 export const consents = pgTable("consents", {
   id: uuid("id").primaryKey().defaultRandom(),

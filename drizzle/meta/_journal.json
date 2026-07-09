@@ -22,6 +22,13 @@
       "when": 1783595390650,
       "tag": "0002_backlog_features",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783597961054,
+      "tag": "0003_naive_slayback",
+      "breakpoints": true
     }
   ]
 }
