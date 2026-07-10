@@ -13,13 +13,13 @@ This is a passion project: public, MIT-licensed, and self-hostable by anyone. Is
 - **Delivery** — opaque single-purpose expiring links by email (Resend) and SMS (AWS SNS), sent through Inngest with retries. Recruiters see sent / opened / started / submitted without seeing data before submission.
 - **Job seeker flow** — mobile-first: OTP step-up (defends forwarded links), versioned consent with IP + timestamp, watermarked JD view (viewer identity + timestamp burned into every page for traceability), wallet pre-fill, controlled uploads (type/size limits, content sniffing, ClamAV before visibility).
 - **Review and export** — in-browser rendering through authorised audited routes (no public URLs), submission statuses, CSV/JSON export of decrypted structured data as a logged, role-gated action.
-- **Security core** — envelope encryption (per-record DEKs wrapped by AWS KMS in ap-southeast-2, local KEK for dev), field-level encryption for PII, private S3 (or MinIO) with SSE-KMS.
+- **Security core** — envelope encryption (per-record DEKs wrapped by a self-managed master key, no external KMS), field-level encryption for PII, private S3 (or MinIO) with SSE-S3 (AES-256).
 - **Audit trail** — append-only, hash-chained per organisation, tamper-evident (integrity is verified on the audit page). No PII in the log; survives purges as a metadata-only record.
 - **Retention and deletion** — per-org retention windows enforced by a scheduled purge; deletion is a crypto-shred (destroy the DEK, then remove rows and objects); full job-seeker erasure honouring APP 11.2.
 
 ## Stack
 
-Next.js 16 (App Router) · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/KMS/SNS (or MinIO) · ClamAV · Docker Compose.
+Next.js 16 (App Router) · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/SNS (or MinIO) · ClamAV · Docker Compose.
 
 ## Local development
 
@@ -51,7 +51,7 @@ Without `RESEND_API_KEY`, emails (secure links, OTP codes) are logged to the dev
 
 `docker compose up` builds the app and runs PostgreSQL, ClamAV, and MinIO (S3-compatible), so a deployment can be fully self-contained — no AWS account required. On startup a one-shot `migrate` service applies the database migrations and a `minio-init` service creates the documents bucket, and the app waits for both plus a healthy ClamAV before booting — so a fresh `docker compose up` yields a working stack with no manual steps. ClamAV's first boot takes a few minutes to load signatures; the healthcheck accounts for this.
 
-Set `BETTER_AUTH_SECRET` (required) and, for the KMS-less local-KEK path, `LOCAL_KEK` (32 bytes of hex) with `ALLOW_LOCAL_KEK_IN_PRODUCTION=true`. If you prefer AWS, point the S3/KMS env vars at real services (ap-southeast-2 keeps data resident in Australia).
+Set `BETTER_AUTH_SECRET` and `LOCAL_KEK` (both required; generate each with `openssl rand -hex 32`). `LOCAL_KEK` is the self-managed master key that wraps every data key, so keep it secret and backed up. If you prefer AWS S3 over MinIO, point the S3 env vars at real services (ap-southeast-2 keeps data resident in Australia).
 
 ## Security posture
 

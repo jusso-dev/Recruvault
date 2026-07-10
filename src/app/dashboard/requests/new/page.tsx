@@ -4,7 +4,11 @@ import { db } from "@/db";
 import { requestTemplates } from "@/db/schema";
 import { requireOrgUser } from "@/lib/guards";
 import { createRequest, deleteTemplate } from "@/actions/requests";
-import { FIELD_LIBRARY, type RequestTemplateDefinition } from "@/lib/fields";
+import {
+  DEFAULT_REQUEST_FIELD_KEYS,
+  FIELD_LIBRARY,
+  type RequestTemplateDefinition,
+} from "@/lib/fields";
 import { can } from "@/lib/rbac";
 import { ActionForm } from "@/components/action-form";
 import {
@@ -43,8 +47,16 @@ export default async function NewRequestPage({
   const selectedKeys = new Set(def?.libraryKeys ?? []);
   const customFieldsDefault = (def?.customLabels ?? []).join("\n");
 
-  const clearanceFields = FIELD_LIBRARY.filter((f) => f.key.startsWith("clearance") || f.key === "sponsoring_agency");
-  const identityFields = FIELD_LIBRARY.filter((f) => !clearanceFields.includes(f));
+  const defaultFields = FIELD_LIBRARY.filter((f) => DEFAULT_REQUEST_FIELD_KEYS.includes(f.key));
+  const clearanceFields = FIELD_LIBRARY.filter(
+    (f) => f.key.startsWith("clearance") || f.key === "sponsoring_agency",
+  );
+  const identityFields = FIELD_LIBRARY.filter(
+    (f) => !clearanceFields.includes(f) && !defaultFields.includes(f),
+  );
+  // Standard attachments default ON for a fresh request; a template's saved
+  // selection wins when one is applied.
+  const defaultChecked = (key: string) => (def ? selectedKeys.has(key) : true);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -129,11 +141,16 @@ export default async function NewRequestPage({
               <Textarea id="description" name="description" defaultValue={def?.description ?? ""} />
             </div>
             <div>
-              <Label htmlFor="jd">Job description (PDF, stored encrypted)</Label>
-              <Input id="jd" name="jd" type="file" accept="application/pdf" />
+              <Label htmlFor="jd">Job description (PDF or Word, stored encrypted)</Label>
+              <Input
+                id="jd"
+                name="jd"
+                type="file"
+                accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              />
               {def && (
                 <p className="mt-1 text-xs text-stone-500">
-                  Templates don&apos;t carry the JD file — attach one if needed.
+                  Templates don&apos;t carry the JD file. Attach one if needed.
                 </p>
               )}
             </div>
@@ -152,6 +169,30 @@ export default async function NewRequestPage({
             <CardTitle>Requested information</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <fieldset>
+              <legend className="mb-2 text-sm font-semibold text-stone-700">
+                Standard attachments
+              </legend>
+              <div className="space-y-2">
+                {defaultFields.map((f) => (
+                  <label key={f.key} className="flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      name="fields"
+                      value={f.key}
+                      className="mt-0.5"
+                      defaultChecked={defaultChecked(f.key)}
+                    />
+                    <span>
+                      {f.label}
+                      {f.helpText && (
+                        <span className="block text-xs text-stone-500">{f.helpText}</span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <fieldset>
               <legend className="mb-2 text-sm font-semibold text-stone-700">
                 Clearance

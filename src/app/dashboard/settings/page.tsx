@@ -1,11 +1,12 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { memberships, organisations, user } from "@/db/schema";
+import { apiKeys, memberships, organisations, user } from "@/db/schema";
 import { requireOrgUser } from "@/lib/guards";
 import { addMember, removeMember, updateMemberRole, updateOrgSettings, verifyDomain } from "@/actions/org";
-import { ASSIGNABLE_ROLES } from "@/lib/rbac";
+import { ASSIGNABLE_ROLES, can } from "@/lib/rbac";
 import { domainsEnabled, getSendingDomain } from "@/lib/resend-domains";
 import { ActionForm } from "@/components/action-form";
+import { ApiKeysManager } from "@/components/api-keys-manager";
 import {
   Badge,
   Button,
@@ -42,6 +43,21 @@ export default async function SettingsPage() {
     .from(memberships)
     .innerJoin(user, eq(user.id, memberships.userId))
     .where(eq(memberships.orgId, ctx.orgId));
+
+  const canManageApi = can(ctx.role, "api:manage");
+  const keys = canManageApi
+    ? await db
+        .select({
+          id: apiKeys.id,
+          name: apiKeys.name,
+          prefix: apiKeys.prefix,
+          lastUsedAt: apiKeys.lastUsedAt,
+          createdAt: apiKeys.createdAt,
+        })
+        .from(apiKeys)
+        .where(and(eq(apiKeys.orgId, ctx.orgId), isNull(apiKeys.revokedAt)))
+        .orderBy(desc(apiKeys.createdAt))
+    : [];
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -220,6 +236,17 @@ export default async function SettingsPage() {
           </p>
         </CardContent>
       </Card>
+
+      {canManageApi && (
+        <Card>
+          <CardHeader>
+            <CardTitle>API keys</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ApiKeysManager keys={keys} />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

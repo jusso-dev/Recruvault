@@ -12,10 +12,8 @@ services:
       DATABASE_URL: postgres://recruvault:recruvault@db:5432/recruvault
       APP_URL: ${APP_URL:-http://localhost:3000}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
-      LOCAL_KEK: ${LOCAL_KEK:-}
-      KMS_KEY_ID: ${KMS_KEY_ID:-}
-      # KMS-less self-host runs in production mode; opt into the local KEK here.
-      ALLOW_LOCAL_KEK_IN_PRODUCTION: ${ALLOW_LOCAL_KEK_IN_PRODUCTION:-}
+      # Self-managed master key (openssl rand -hex 32). No external KMS.
+      LOCAL_KEK: ${LOCAL_KEK:?set LOCAL_KEK}
       AWS_REGION: ${AWS_REGION:-ap-southeast-2}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-recruvault}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-recruvault-secret}

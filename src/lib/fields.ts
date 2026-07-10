@@ -143,6 +143,22 @@ export const FIELD_LIBRARY: FieldDefinition[] = [
     sensitive: true,
     walletType: "police_check_date",
   },
+  // --- Standard attachments (requested on almost every role) ---
+  {
+    key: "resume",
+    type: "file_upload",
+    label: "Resume / CV",
+    helpText: "Your current resume or CV (PDF or Word).",
+    sensitive: false,
+    walletType: "resume",
+  },
+  {
+    key: "suitability_statement",
+    type: "long_text",
+    label: "Suitability statement",
+    helpText: "A short statement on why you are suited to this role.",
+    sensitive: false,
+  },
 ];
 
 export function fieldDefinition(key: string): FieldDefinition | undefined {
@@ -260,9 +276,28 @@ export const REFERENCE_SEED: ReferenceSeed[] = [
 
 // Upload constraints for controlled document uploads.
 export const UPLOAD_MAX_BYTES = 15 * 1024 * 1024; // 15 MB
+
+const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+// Default allowlist for responder/wallet uploads (evidence: scans and photos).
 export const UPLOAD_ALLOWED_TYPES = [
   "application/pdf",
   "image/jpeg",
   "image/png",
   "image/webp",
 ];
+
+// Job descriptions and resumes are documents, so they also accept Word (.docx).
+export const JD_ALLOWED_TYPES = ["application/pdf", DOCX];
+export const RESUME_ALLOWED_TYPES = ["application/pdf", DOCX];
+
+/**
+ * Allowed content types for a requested file field, by field key. Resume
+ * accepts PDF or Word; everything else stays PDF/image only.
+ */
+export function allowedTypesForField(key: string): string[] {
+  return key === "resume" ? RESUME_ALLOWED_TYPES : UPLOAD_ALLOWED_TYPES;
+}
+
+// Requested items added to (almost) every request by default; still removable.
+export const DEFAULT_REQUEST_FIELD_KEYS = ["resume", "suitability_statement"];

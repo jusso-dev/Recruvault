@@ -24,6 +24,7 @@ export const PERMISSIONS = [
   "export:documents",
   "audit:view",
   "deletion:action",
+  "api:manage",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -44,6 +45,7 @@ const ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
     "export:documents",
     "audit:view",
     "deletion:action",
+    "api:manage",
   ],
   admin: [
     "users:manage",
@@ -59,6 +61,7 @@ const ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
     "export:documents",
     "audit:view",
     "deletion:action",
+    "api:manage",
   ],
   recruiter: [
     "templates:manage",

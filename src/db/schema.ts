@@ -11,6 +11,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // BetterAuth tables (both account worlds share one identity store; the
@@ -403,11 +404,16 @@ export const submissions = pgTable(
     // Set when the retention job purges this submission's PII.
     purgedAt: timestamp("purged_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [
     index("submissions_request_idx").on(t.requestId),
     index("submissions_candidate_idx").on(t.candidateAccountId),
     index("submissions_access_token_idx").on(t.accessTokenId),
+    // At most one open draft per secure link, so save-and-resume upserts cleanly.
+    uniqueIndex("submissions_draft_unique_idx")
+      .on(t.accessTokenId)
+      .where(sql`${t.status} = 'started'`),
   ],
 );
 
@@ -652,4 +658,50 @@ export const linkRateLimits = pgTable("link_rate_limits", {
   key: text("key").primaryKey(),
   count: integer("count").notNull().default(0),
   windowStart: timestamp("window_start").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// Programmatic access. API keys authenticate the REST API and the MCP server;
+// only the SHA-256 hash is stored (mirrors accessTokens). The key inherits the
+// creating member's org and role.
+// ---------------------------------------------------------------------------
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    keyHash: text("key_hash").notNull().unique(),
+    // First chars of the token (e.g. "rv_1a2b3c"), shown in the UI to identify it.
+    prefix: text("prefix").notNull(),
+    lastUsedAt: timestamp("last_used_at"),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [index("api_keys_org_idx").on(t.orgId)],
+);
+
+// ---------------------------------------------------------------------------
+// Discovery profile: the opt-in, plaintext facts a job seeker consents to
+// expose so recruiters can match roles to them. Never documents, never wallet
+// ciphertext. Matching (lib/match.ts) reads only discoverable rows.
+// ---------------------------------------------------------------------------
+export const discoveryProfiles = pgTable("discovery_profiles", {
+  candidateAccountId: uuid("candidate_account_id")
+    .primaryKey()
+    .references(() => candidateAccounts.id, { onDelete: "cascade" }),
+  // Opaque, stable handle surfaced to recruiters instead of any PII.
+  handle: text("handle").notNull().unique(),
+  discoverable: boolean("discoverable").notNull().default(false),
+  clearanceLevel: text("clearance_level"),
+  citizenship: text("citizenship"),
+  rightToWork: text("right_to_work"),
+  skills: jsonb("skills").$type<string[]>().notNull().default([]),
+  location: text("location"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

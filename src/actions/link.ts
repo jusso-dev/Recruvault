@@ -33,7 +33,7 @@ import { getSession, requestMeta } from "@/lib/guards";
 import { sendEvent } from "@/inngest/client";
 import { newStorageKey, putObjectBytes, deleteObject } from "@/lib/storage";
 import { sniffContentType } from "@/lib/scan";
-import { UPLOAD_ALLOWED_TYPES, UPLOAD_MAX_BYTES } from "@/lib/fields";
+import { allowedTypesForField, UPLOAD_MAX_BYTES } from "@/lib/fields";
 import type { ActionResult } from "./org";
 
 const log = getLogger("link");
@@ -251,8 +251,10 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
       }
       const bytes = Buffer.from(await file.arrayBuffer());
       const sniffed = sniffContentType(bytes);
-      if (!sniffed || !UPLOAD_ALLOWED_TYPES.includes(sniffed)) {
-        return { ok: false, error: `"${f.label}" must be a PDF or an image.` };
+      const allowed = allowedTypesForField(f.key);
+      if (!sniffed || !allowed.includes(sniffed)) {
+        const hint = f.key === "resume" ? "a PDF or Word document" : "a PDF or an image";
+        return { ok: false, error: `"${f.label}" must be ${hint}.` };
       }
       preparedUploads.push({
         fieldId: f.id,

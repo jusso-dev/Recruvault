@@ -168,9 +168,13 @@ export async function GET(
   }
 
   const obj = await getObjectStream(doc.storageKey);
-  const disposition = wantsDownload
-    ? `attachment; filename="${doc.fileName}"`
-    : `inline; filename="${doc.fileName}"`;
+  // Only PDFs can be watermarked and rendered view-only in the browser. Any
+  // other type (e.g. a Word JD) is served as a download, never inline, so an
+  // un-watermarked original is not presented as if it were view-only.
+  const disposition =
+    wantsDownload || !isPdf
+      ? `attachment; filename="${doc.fileName}"`
+      : `inline; filename="${doc.fileName}"`;
 
   return new NextResponse(obj.body as unknown as ReadableStream, {
     headers: {

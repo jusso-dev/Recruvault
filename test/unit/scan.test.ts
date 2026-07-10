@@ -28,6 +28,27 @@ describe("sniffContentType magic-byte detection", () => {
     expect(sniffContentType(bytes)).toBe("image/webp");
   });
 
+  it("detects DOCX (zip with a word/ entry)", () => {
+    const bytes = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.alloc(20),
+      Buffer.from("word/document.xml"),
+      Buffer.alloc(8),
+    ]);
+    expect(sniffContentType(bytes)).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+  });
+
+  it("returns null for a non-Office zip", () => {
+    const bytes = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.from("photos/img1.jpg"),
+      Buffer.alloc(8),
+    ]);
+    expect(sniffContentType(bytes)).toBeNull();
+  });
+
   it("returns null for too-short input", () => {
     expect(sniffContentType(Buffer.from([0xff, 0xd8]))).toBeNull();
   });

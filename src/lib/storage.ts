@@ -9,7 +9,7 @@ import {
 import type { Readable } from "stream";
 
 /**
- * Document storage: private S3 bucket (ap-southeast-2) with SSE-KMS, no
+ * Document storage: private S3 bucket (ap-southeast-2) with SSE-S3 (AES-256), no
  * public access. Uploads buffer through the app server so every file is
  * content-sniffed and virus-scanned before it becomes visible; reads stream
  * through an authorised route. Originals are never exposed through a public
@@ -49,8 +49,10 @@ export async function putObjectBytes(
       Key: storageKey,
       Body: bytes,
       ContentType: contentType,
-      ServerSideEncryption: "aws:kms",
-      ...(process.env.KMS_KEY_ID ? { SSEKMSKeyId: process.env.KMS_KEY_ID } : {}),
+      // SSE-S3 (AES-256) — provider-managed at-rest encryption that also works
+      // on MinIO. Objects hold only ciphertext (fields are already envelope
+      // encrypted before upload); this is defence in depth for the bucket.
+      ServerSideEncryption: "AES256",
     }),
   );
 }

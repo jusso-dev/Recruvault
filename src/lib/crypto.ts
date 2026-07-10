@@ -7,7 +7,6 @@ import {
   randomUUID,
   timingSafeEqual,
 } from "crypto";
-import { KMSClient, EncryptCommand, DecryptCommand } from "@aws-sdk/client-kms";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { dataKeys } from "@/db/schema";
@@ -16,39 +15,16 @@ import { dataKeys } from "@/db/schema";
  * Envelope encryption.
  *
  * Every encrypted record gets its own 256-bit data encryption key (DEK). The
- * DEK is wrapped by the customer master key in AWS KMS (ap-southeast-2) and
- * stored in the data_keys registry. Deleting a record is a crypto-shred:
- * destroy the wrapped DEK and the ciphertext is unrecoverable.
- *
- * In local development (no KMS_KEY_ID) DEKs are wrapped with a local KEK from
- * the LOCAL_KEK env var. That mode must never be used in production.
+ * DEK is wrapped by a self-managed 256-bit master key (KEK) held in the
+ * LOCAL_KEK env var and stored, wrapped, in the data_keys registry. Deleting a
+ * record is a crypto-shred: destroy the wrapped DEK and the ciphertext is
+ * unrecoverable. No external KMS is required; keep LOCAL_KEK secret and backed
+ * up (losing it makes all ciphertext unrecoverable).
  */
 
-const KMS_KEY_ID = process.env.KMS_KEY_ID;
-
-let kms: KMSClient | undefined;
-function kmsClient() {
-  kms ??= new KMSClient({ region: process.env.AWS_REGION ?? "ap-southeast-2" });
-  return kms;
-}
-
 function localKek(): Buffer {
-  // Fail closed: the local KEK path must never run in production unless the
-  // operator has explicitly opted in (mirrors the env validation in env.ts).
-  if (
-    process.env.NODE_ENV === "production" &&
-    process.env.ALLOW_LOCAL_KEK_IN_PRODUCTION !== "true"
-  ) {
-    throw new Error(
-      "Refusing to use LOCAL_KEK in production. Set KMS_KEY_ID, or opt in with ALLOW_LOCAL_KEK_IN_PRODUCTION=true.",
-    );
-  }
   const hex = process.env.LOCAL_KEK;
-  if (!hex) {
-    throw new Error(
-      "No KMS_KEY_ID and no LOCAL_KEK configured — cannot wrap data keys.",
-    );
-  }
+  if (!hex) throw new Error("LOCAL_KEK is required to wrap data keys.");
   const key = Buffer.from(hex, "hex");
   if (key.length !== 32) throw new Error("LOCAL_KEK must be 32 bytes of hex.");
   return key;
@@ -70,40 +46,12 @@ function aesDecrypt(key: Buffer, payload: string): Buffer {
   return Buffer.concat([decipher.update(Buffer.from(ctB64, "base64")), decipher.final()]);
 }
 
-// Bind each wrapped DEK to its registry id so a wrapped blob from one record
-// cannot be substituted into another — KMS decrypt fails if the context differs.
-function dekContext(dekId: string): Record<string, string> {
-  return { dekId };
-}
-
-async function wrapDek(
-  dek: Buffer,
-  dekId: string,
-): Promise<{ wrapped: string; source: "kms" | "local" }> {
-  if (KMS_KEY_ID) {
-    const out = await kmsClient().send(
-      new EncryptCommand({
-        KeyId: KMS_KEY_ID,
-        Plaintext: dek,
-        EncryptionContext: dekContext(dekId),
-      }),
-    );
-    return { wrapped: Buffer.from(out.CiphertextBlob!).toString("base64"), source: "kms" };
-  }
+function wrapDek(dek: Buffer): { wrapped: string; source: "local" } {
   return { wrapped: aesEncrypt(localKek(), dek), source: "local" };
 }
 
-async function unwrapDek(wrapped: string, source: string, dekId: string): Promise<Buffer> {
-  if (source === "kms") {
-    const out = await kmsClient().send(
-      new DecryptCommand({
-        CiphertextBlob: Buffer.from(wrapped, "base64"),
-        KeyId: KMS_KEY_ID,
-        EncryptionContext: dekContext(dekId),
-      }),
-    );
-    return Buffer.from(out.Plaintext!);
-  }
+// `source` is kept for the data_keys registry (only "local" is produced now).
+function unwrapDek(wrapped: string): Buffer {
   return aesDecrypt(localKek(), wrapped);
 }
 
@@ -115,9 +63,8 @@ export async function createDataKey(
   executor: Pick<typeof db, "insert"> = db,
 ): Promise<{ dekId: string; dek: Buffer }> {
   const dek = randomBytes(32);
-  // Generate the id up front so it can bind the wrapped key via EncryptionContext.
   const dekId = randomUUID();
-  const { wrapped, source } = await wrapDek(dek, dekId);
+  const { wrapped, source } = wrapDek(dek);
   await executor.insert(dataKeys).values({ id: dekId, wrappedKey: wrapped, keySource: source });
   return { dekId, dek };
 }
@@ -127,7 +74,7 @@ export async function getDataKey(dekId: string): Promise<Buffer> {
   const [row] = await db.select().from(dataKeys).where(eq(dataKeys.id, dekId));
   if (!row) throw new Error("Data key not found.");
   if (row.shreddedAt || !row.wrappedKey) throw new Error("Data key has been shredded.");
-  return unwrapDek(row.wrappedKey, row.keySource, dekId);
+  return unwrapDek(row.wrappedKey);
 }
 
 /** A db handle or an open transaction — lets callers shred atomically. */

@@ -20,13 +20,11 @@ const schema = z
     BETTER_AUTH_SECRET: z.string().min(32, "BETTER_AUTH_SECRET must be at least 32 chars"),
     LINK_SESSION_SECRET: z.string().min(32).optional(),
 
-    // Encryption
-    KMS_KEY_ID: z.string().optional(),
+    // Encryption. Self-managed master key (KEK); no external KMS. Keep it
+    // secret and backed up — losing it makes all ciphertext unrecoverable.
     LOCAL_KEK: z
       .string()
-      .regex(/^[0-9a-f]{64}$/i, "LOCAL_KEK must be 32 bytes of hex")
-      .optional(),
-    ALLOW_LOCAL_KEK_IN_PRODUCTION: z.literal("true").optional(),
+      .regex(/^[0-9a-f]{64}$/i, "LOCAL_KEK must be 32 bytes of hex (openssl rand -hex 32)"),
     AWS_REGION: z.string().default("ap-southeast-2"),
 
     // Storage
@@ -58,15 +56,6 @@ const schema = z
   })
   .superRefine((val, ctx) => {
     if (val.NODE_ENV !== "production") return;
-    // Fail closed: production must use KMS unless the local KEK is explicitly opted in.
-    if (!val.KMS_KEY_ID && !(val.LOCAL_KEK && val.ALLOW_LOCAL_KEK_IN_PRODUCTION === "true")) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "Production requires KMS_KEY_ID, or LOCAL_KEK with ALLOW_LOCAL_KEK_IN_PRODUCTION=true.",
-        path: ["KMS_KEY_ID"],
-      });
-    }
     if (val.SCAN_DISABLED === "true") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

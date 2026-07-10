@@ -18,6 +18,7 @@ const EXPECTED: Record<OrgRole, Permission[]> = {
     "export:documents",
     "audit:view",
     "deletion:action",
+    "api:manage",
   ],
   recruiter: [
     "templates:manage",

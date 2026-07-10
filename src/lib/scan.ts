@@ -65,6 +65,9 @@ export async function scanBytes(bytes: Buffer): Promise<ScanResult> {
  * Content sniffing: verify the uploaded bytes actually match an allowed type,
  * regardless of the declared Content-Type or extension.
  */
+export const DOCX_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 export function sniffContentType(bytes: Buffer): string | null {
   if (bytes.length < 12) return null;
   if (bytes.subarray(0, 5).toString("latin1") === "%PDF-") return "application/pdf";
@@ -76,5 +79,10 @@ export function sniffContentType(bytes: Buffer): string | null {
     bytes.subarray(8, 12).toString("latin1") === "WEBP"
   )
     return "image/webp";
+  // DOCX is a ZIP (PK\x03\x04) whose archive contains word/document.xml. The
+  // "word/" marker distinguishes it from other Office/zip formats.
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
+    if (bytes.includes(Buffer.from("word/"))) return DOCX_TYPE;
+  }
   return null;
 }

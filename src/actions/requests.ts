@@ -20,7 +20,7 @@ import { requireOrgUser, requestMeta } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { sendEvent } from "@/inngest/client";
 import { newStorageKey, putObjectBytes } from "@/lib/storage";
-import { fieldDefinition, UPLOAD_MAX_BYTES } from "@/lib/fields";
+import { fieldDefinition, JD_ALLOWED_TYPES, UPLOAD_MAX_BYTES } from "@/lib/fields";
 import { sniffContentType } from "@/lib/scan";
 import type { ActionResult } from "./org";
 
@@ -62,18 +62,18 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
     if (jd.size > UPLOAD_MAX_BYTES) return { ok: false, error: "JD exceeds 15 MB." };
     const bytes = Buffer.from(await jd.arrayBuffer());
     const sniffed = sniffContentType(bytes);
-    if (sniffed !== "application/pdf") {
-      return { ok: false, error: "The JD must be a PDF." };
+    if (!sniffed || !JD_ALLOWED_TYPES.includes(sniffed)) {
+      return { ok: false, error: "The JD must be a PDF or Word (.docx) document." };
     }
     const storageKey = newStorageKey("org", ctx.orgId, jd.name);
-    await putObjectBytes(storageKey, bytes, "application/pdf");
+    await putObjectBytes(storageKey, bytes, sniffed);
     const [doc] = await db
       .insert(documents)
       .values({
         orgId: ctx.orgId,
         kind: "jd",
         fileName: jd.name,
-        contentType: "application/pdf",
+        contentType: sniffed,
         sizeBytes: jd.size,
         storageKey,
         checksum: createHash("sha256").update(bytes).digest("hex"),
