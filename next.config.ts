@@ -1,5 +1,14 @@
 import type { NextConfig } from "next";
 
+const isDev = process.env.NODE_ENV === "development";
+
+// Dev needs 'unsafe-eval' (React/Turbopack debugging) and a websocket source
+// for HMR; production stays strict.
+const scriptSrc = isDev
+  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+  : "script-src 'self' 'unsafe-inline'";
+const connectSrc = isDev ? "connect-src 'self' ws:" : "connect-src 'self'";
+
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
@@ -23,11 +32,11 @@ const nextConfig: NextConfig = {
             // in their own handler so inline PDFs still render.
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline'",
+              scriptSrc,
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob:",
               "font-src 'self'",
-              "connect-src 'self'",
+              connectSrc,
               "object-src 'none'",
               "base-uri 'self'",
               "form-action 'self'",
