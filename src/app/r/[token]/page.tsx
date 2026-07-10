@@ -7,7 +7,7 @@ import { OtpVerify } from "./otp-verify";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-zinc-50 p-4">
+    <main className="flex min-h-screen items-center justify-center bg-stone-50 p-4">
       <Card className="w-full max-w-md">
         <CardContent>{children}</CardContent>
       </Card>
@@ -37,7 +37,7 @@ export default async function SecureLinkPage({
     return (
       <Shell>
         <h1 className="text-lg font-semibold">This link is not valid</h1>
-        <p className="mt-2 text-sm text-zinc-600">
+        <p className="mt-2 text-sm text-stone-600">
           Check you copied the full link, or contact the recruiter who sent it.
         </p>
       </Shell>
@@ -47,7 +47,7 @@ export default async function SecureLinkPage({
     return (
       <Shell>
         <h1 className="text-lg font-semibold">This link is no longer active</h1>
-        <p className="mt-2 text-sm text-zinc-600">
+        <p className="mt-2 text-sm text-stone-600">
           The sender has revoked this secure link. Contact the recruiter who sent it if
           you still need to respond.
         </p>
@@ -58,7 +58,7 @@ export default async function SecureLinkPage({
     return (
       <Shell>
         <h1 className="text-lg font-semibold">Already completed</h1>
-        <p className="mt-2 text-sm text-zinc-600">
+        <p className="mt-2 text-sm text-stone-600">
           A response has already been submitted through this link. Secure links are
           single-purpose.
         </p>
@@ -69,7 +69,7 @@ export default async function SecureLinkPage({
     return (
       <Shell>
         <h1 className="text-lg font-semibold">This link has expired</h1>
-        <p className="mt-2 text-sm text-zinc-600">
+        <p className="mt-2 text-sm text-stone-600">
           For your security, secure links stop working after their expiry. Ask the
           recruiter to send a new one.
         </p>
@@ -90,15 +90,15 @@ export default async function SecureLinkPage({
   return (
     <Shell>
       <h1 className="text-lg font-semibold">Secure request from {org.name}</h1>
-      <p className="mt-1 text-sm font-medium text-zinc-800">{request.title}</p>
-      <p className="mt-3 text-sm text-zinc-600">
+      <p className="mt-1 text-sm font-medium text-stone-800">{request.title}</p>
+      <p className="mt-3 text-sm text-stone-600">
         To protect your information, we&apos;ll first verify it&apos;s really you.
         We&apos;ll send a one-time code to <strong>{masked}</strong>.
       </p>
       <div className="mt-4">
         <OtpVerify token={token} />
       </div>
-      <p className="mt-4 text-xs text-zinc-500">
+      <p className="mt-4 text-xs text-stone-500">
         Recruvault will never ask for this code by email, phone, or message. Your data
         is encrypted, access is audited, and it auto-deletes on the organisation&apos;s
         retention schedule.

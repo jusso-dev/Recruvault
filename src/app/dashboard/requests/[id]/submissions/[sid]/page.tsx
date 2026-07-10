@@ -49,7 +49,7 @@ export default async function SubmissionReviewPage({
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Submission — {request.title}</h1>
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-stone-500">
             {submission.responderEmail ?? "responder"} ·{" "}
             {submission.submittedAt?.toLocaleString("en-AU")}
           </p>
@@ -61,7 +61,7 @@ export default async function SubmissionReviewPage({
 
       {submission.purgedAt ? (
         <Card>
-          <CardContent className="py-10 text-center text-zinc-500">
+          <CardContent className="py-10 text-center text-stone-500">
             This submission&apos;s data was purged on{" "}
             {submission.purgedAt.toLocaleDateString("en-AU")} (crypto-shredded). The
             audit record of its handling is retained.
@@ -74,10 +74,10 @@ export default async function SubmissionReviewPage({
               <CardTitle>Structured values</CardTitle>
             </CardHeader>
             <CardContent>
-              <dl className="divide-y divide-zinc-100">
+              <dl className="divide-y divide-stone-100">
                 {values.map((v) => (
                   <div key={v.fieldId} className="flex justify-between gap-4 py-2 text-sm">
-                    <dt className="text-zinc-600">
+                    <dt className="text-stone-600">
                       {v.label}
                       {v.sensitive && (
                         <Badge variant="amber" className="ml-2">
@@ -98,7 +98,7 @@ export default async function SubmissionReviewPage({
             </CardHeader>
             <CardContent>
               {documents.length === 0 ? (
-                <p className="text-sm text-zinc-500">No documents uploaded.</p>
+                <p className="text-sm text-stone-500">No documents uploaded.</p>
               ) : (
                 <ul className="space-y-2 text-sm">
                   {documents.map((d) => (
@@ -126,7 +126,7 @@ export default async function SubmissionReviewPage({
                   ))}
                 </ul>
               )}
-              <p className="mt-3 text-xs text-zinc-500">
+              <p className="mt-3 text-xs text-stone-500">
                 Documents render in-browser through an authorised, audited route. There
                 are no public URLs and no bulk raw download.
               </p>

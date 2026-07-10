@@ -99,7 +99,7 @@ function SignInForm() {
             Use a passkey
           </Button>
         </div>
-        <p className="text-sm text-zinc-600">
+        <p className="text-sm text-stone-600">
           New here?{" "}
           <Link href="/sign-up" className="font-medium underline">
             Create an account

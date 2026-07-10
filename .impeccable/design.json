@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-10T00:00:00.000Z",
+  "title": "Design System: Recruvault",
+  "extensions": {
+    "colorMeta": {
+      "accent-oxblood": {
+        "role": "primary",
+        "displayName": "Oxblood",
+        "canonical": "oklch(0.46 0.132 24)",
+        "tonalRamp": [
+          "oklch(0.2 0.08 24)",
+          "oklch(0.28 0.1 24)",
+          "oklch(0.36 0.12 24)",
+          "oklch(0.46 0.132 24)",
+          "oklch(0.58 0.13 26)",
+          "oklch(0.72 0.1 28)",
+          "oklch(0.86 0.06 30)",
+          "oklch(0.955 0.028 30)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "oklch(0.985 0.006 75)",
+        "tonalRamp": [
+          "oklch(0.216 0.008 58)",
+          "oklch(0.374 0.01 58)",
+          "oklch(0.553 0.01 60)",
+          "oklch(0.709 0.008 65)",
+          "oklch(0.869 0.005 75)",
+          "oklch(0.923 0.004 75)",
+          "oklch(0.97 0.003 75)",
+          "oklch(0.985 0.006 75)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Warm Ink",
+        "canonical": "oklch(0.24 0.014 60)",
+        "tonalRamp": [
+          "oklch(0.18 0.01 58)",
+          "oklch(0.24 0.014 60)",
+          "oklch(0.34 0.014 58)",
+          "oklch(0.45 0.012 60)",
+          "oklch(0.55 0.01 60)",
+          "oklch(0.71 0.008 65)",
+          "oklch(0.87 0.005 75)",
+          "oklch(0.97 0.003 75)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page titles only." },
+      "data": { "displayName": "Data (mono)", "purpose": "Record ids, audit sequence numbers, hashes; tabular." }
+    },
+    "shadows": [
+      { "name": "card-rest", "value": "0 1px 2px rgba(41,37,36,0.04), 0 1px 1px rgba(41,37,36,0.03)", "purpose": "The only ambient shadow: a warm 1px lift under cards." },
+      { "name": "control", "value": "0 1px 2px rgba(41,37,36,0.05)", "purpose": "Subtle tactile edge on buttons and inputs." }
+    ],
+    "motion": [
+      { "name": "state", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Ease-out for 150ms hover/focus state changes." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button (Ink)",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The default action on almost every surface.",
+      "html": "<button class=\"ds-btn-primary\">New request</button>",
+      "css": ".ds-btn-primary { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:40px; padding:0 16px; border:none; border-radius:6px; background:oklch(0.216 0.008 58); color:oklch(0.985 0.002 75); font:600 14px/1 'Geist Sans',system-ui,sans-serif; box-shadow:0 1px 2px rgba(41,37,36,0.05); transition:background-color .15s cubic-bezier(0.16,1,0.3,1); } .ds-btn-primary:hover { background:oklch(0.29 0.008 58); } .ds-btn-primary:focus-visible { outline:2px solid oklch(0.46 0.132 24); outline-offset:2px; }"
+    },
+    {
+      "name": "Accent Button (Oxblood)",
+      "kind": "button",
+      "refersTo": "button-accent",
+      "description": "Reserved for the single most consequential action on a surface.",
+      "html": "<button class=\"ds-btn-accent\">Confirm deletion</button>",
+      "css": ".ds-btn-accent { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:40px; padding:0 16px; border:none; border-radius:6px; background:oklch(0.46 0.132 24); color:oklch(0.985 0.006 75); font:600 14px/1 'Geist Sans',system-ui,sans-serif; box-shadow:0 1px 2px rgba(41,37,36,0.05); transition:background-color .15s cubic-bezier(0.16,1,0.3,1); } .ds-btn-accent:hover { background:oklch(0.4 0.13 24); } .ds-btn-accent:focus-visible { outline:2px solid oklch(0.46 0.132 24); outline-offset:2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Neutral secondary action.",
+      "html": "<button class=\"ds-btn-secondary\">Full verify</button>",
+      "css": ".ds-btn-secondary { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:40px; padding:0 16px; border:1px solid oklch(0.869 0.005 75); border-radius:6px; background:#fff; color:oklch(0.374 0.01 58); font:600 14px/1 'Geist Sans',system-ui,sans-serif; box-shadow:0 1px 2px rgba(41,37,36,0.05); transition:background-color .15s,border-color .15s; } .ds-btn-secondary:hover { background:oklch(0.985 0.002 75); border-color:oklch(0.709 0.008 65); } .ds-btn-secondary:focus-visible { outline:2px solid oklch(0.46 0.132 24); outline-offset:2px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Standard form field with oxblood focus.",
+      "html": "<input class=\"ds-input\" placeholder=\"mail.your-agency.com.au\" />",
+      "css": ".ds-input { width:260px; height:40px; padding:8px 12px; border:1px solid oklch(0.869 0.005 75); border-radius:6px; background:#fff; color:oklch(0.216 0.008 58); font:400 14px/1.4 'Geist Sans',system-ui,sans-serif; box-shadow:0 1px 2px rgba(41,37,36,0.05); transition:border-color .15s; } .ds-input::placeholder { color:oklch(0.709 0.008 65); } .ds-input:focus-visible { border-color:oklch(0.46 0.132 24); outline:2px solid oklch(0.46 0.132 24 / 0.4); outline-offset:0; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge-status",
+      "description": "Record-state pill; pairs with a leading colored dot in list rows.",
+      "html": "<span class=\"ds-badge\"><span class=\"ds-dot\"></span>open</span>",
+      "css": ".ds-badge { display:inline-flex; align-items:center; gap:6px; padding:2px 10px; border:1px solid oklch(0.9 0.05 155); border-radius:9999px; background:oklch(0.97 0.03 155); color:oklch(0.45 0.11 155); font:500 12px/1.4 'Geist Sans',system-ui,sans-serif; } .ds-dot { width:8px; height:8px; border-radius:9999px; background:oklch(0.7 0.15 155); }"
+    },
+    {
+      "name": "Record Row",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Signature list row: status dot, title, tabular meta, status pill, chevron.",
+      "html": "<a class=\"ds-row\"><span class=\"ds-row-dot\"></span><span class=\"ds-row-main\"><span class=\"ds-row-title\">Senior Systems Engineer, NV1</span><span class=\"ds-row-meta\">3 submissions &middot; expires 24/07/2026 &middot; listed</span></span><span class=\"ds-row-pill\">open</span><span class=\"ds-row-chev\">&rsaquo;</span></a>",
+      "css": ".ds-row { display:flex; align-items:center; gap:12px; padding:16px 20px; border:1px solid oklch(0.923 0.004 75); border-radius:8px; background:#fff; box-shadow:0 1px 2px rgba(41,37,36,0.04); text-decoration:none; transition:background-color .15s,border-color .15s; } .ds-row:hover { border-color:oklch(0.869 0.005 75); background:oklch(0.985 0.002 75 / 0.6); } .ds-row-dot { width:8px; height:8px; border-radius:9999px; background:oklch(0.7 0.15 155); flex:none; } .ds-row-main { display:flex; flex-direction:column; min-width:0; flex:1; } .ds-row-title { font:600 14px/1.3 'Geist Sans',system-ui,sans-serif; color:oklch(0.216 0.008 58); } .ds-row-meta { margin-top:2px; font:400 14px/1.4 'Geist Sans',system-ui,sans-serif; color:oklch(0.553 0.01 60); font-variant-numeric:tabular-nums; } .ds-row-pill { padding:2px 10px; border:1px solid oklch(0.9 0.05 155); border-radius:9999px; background:oklch(0.97 0.03 155); color:oklch(0.45 0.11 155); font:500 12px/1.4 'Geist Sans',system-ui,sans-serif; } .ds-row-chev { color:oklch(0.709 0.008 65); font-size:18px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Compliance Ledger",
+    "overview": "Recruvault handles the most sensitive moment in hiring: a cleared candidate handing over clearance levels, identity documents, and right-to-work evidence. The interface feels like a well-kept compliance ledger on good paper, read at a desk in daylight. Warm, quiet, dense: paper-tinted stone neutrals, ink-black text, tabular figures, and a single deep oxblood accent rationed to brand, active nav, links, focus, and selection. Structure comes from hairline borders and tonal layering, not shadow or color. It rejects dark mode, purple/blue SaaS gradients, glassmorphism, hero-metric dashboards, and decorative motion.",
+    "keyCharacteristics": [
+      "Warm paper neutrals (stone ramp), ink-black text, never pure #000/#fff",
+      "One rationed accent: deep oxblood, on ~5% of any screen",
+      "Dense, legible, tabular data with hairline borders over shadows",
+      "Institutional crispness: tight 6-8px radii, restrained 150ms state motion"
+    ],
+    "rules": [
+      { "name": "The Rationed Voice Rule", "body": "Oxblood appears on no more than ~5% of any screen. Never a primary-button fill, never a background panel, never decoration.", "section": "colors" },
+      { "name": "The Warm-Only Rule", "body": "Every neutral tilts warm. zinc, slate, gray, #000 and #fff are forbidden; use the stone ramp and paper/ink tokens.", "section": "colors" },
+      { "name": "The Tabular Figures Rule", "body": "Any surface showing numbers as data uses font-variant-numeric: tabular-nums.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Surfaces are flat at rest. State is border and background, never a growing drop shadow.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep every neutral warm: use the stone ramp, paper, and ink tokens.",
+      "Do ration oxblood to brand, active nav, links, focus, selection, and status dots (<=5% of a screen).",
+      "Do use tabular figures for all numeric data so ledgers align.",
+      "Do express hover/focus with border and background shifts and a 2px oxblood focus outline.",
+      "Do give empty states an accent icon, a teaching sentence, and a primary action."
+    ],
+    "donts": [
+      "Don't ship dark mode or honour prefers-color-scheme; the product is light-only.",
+      "Don't use zinc, slate, gray, #000, or #fff; they read cold against the paper.",
+      "Don't fill primary buttons with oxblood; primary is ink, oxblood is the rationed accent.",
+      "Don't reach for purple/blue trust gradients, glassmorphism, hero-metric tiles, or identical icon-card grids.",
+      "Don't grow drop shadows on hover or animate layout properties; motion is <=150ms.",
+      "Don't use em dashes in UI copy."
+    ]
+  }
+}

@@ -69,7 +69,7 @@ export default async function SettingsPage() {
                 max={3650}
                 defaultValue={org.retentionDays}
               />
-              <p className="mt-1 text-xs text-zinc-500">
+              <p className="mt-1 text-xs text-stone-500">
                 Purged data is crypto-shredded and unrecoverable. The audit trail keeps
                 a metadata-only record.
               </p>
@@ -95,7 +95,7 @@ export default async function SettingsPage() {
                 defaultValue={org.sendingDomain ?? ""}
                 placeholder="mail.your-agency.com.au"
               />
-              <p className="mt-1 text-xs text-zinc-500">
+              <p className="mt-1 text-xs text-stone-500">
                 {org.sendingDomainVerifiedAt
                   ? `Verified ${org.sendingDomainVerifiedAt.toLocaleDateString("en-AU")}.`
                   : "Requires SPF, DKIM, and DMARC records — verification is completed in Resend. Until verified, mail goes via the shared Recruvault domain with your display name."}
@@ -105,13 +105,13 @@ export default async function SettingsPage() {
           </ActionForm>
 
           {dns && dns.records.length > 0 && (
-            <div className="mt-4 space-y-3 border-t border-zinc-100 pt-4">
+            <div className="mt-4 space-y-3 border-t border-stone-100 pt-4">
               <p className="text-sm font-medium">
                 Add these DNS records to {org.sendingDomain}, then verify
               </p>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
-                  <thead className="text-zinc-500">
+                  <thead className="text-stone-500">
                     <tr>
                       <th className="py-1 pr-3">Type</th>
                       <th className="py-1 pr-3">Name</th>
@@ -121,7 +121,7 @@ export default async function SettingsPage() {
                   </thead>
                   <tbody className="font-mono">
                     {dns.records.map((r, i) => (
-                      <tr key={i} className="border-t border-zinc-100 align-top">
+                      <tr key={i} className="border-t border-stone-100 align-top">
                         <td className="py-1 pr-3">{r.type}</td>
                         <td className="py-1 pr-3 break-all">{r.name}</td>
                         <td className="py-1 pr-3 break-all">{r.value}</td>
@@ -150,12 +150,12 @@ export default async function SettingsPage() {
           <CardTitle>Users and roles</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <ul className="divide-y divide-zinc-100">
+          <ul className="divide-y divide-stone-100">
             {members.map((m) => (
               <li key={m.membership.id} className="flex items-center justify-between gap-3 py-2 text-sm">
                 <div>
                   <span className="font-medium">{m.name}</span>
-                  <span className="ml-2 text-zinc-500">{m.email}</span>
+                  <span className="ml-2 text-stone-500">{m.email}</span>
                 </div>
                 {m.membership.role === "owner" ? (
                   <Badge>owner</Badge>
@@ -213,7 +213,7 @@ export default async function SettingsPage() {
             </div>
             <Button type="submit">Add</Button>
           </ActionForm>
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-stone-500">
             Reviewer = read-only, sees only submissions shared with them (suits an
             end-employer hiring manager). Compliance = read-only across records plus
             full audit access and deletion powers.

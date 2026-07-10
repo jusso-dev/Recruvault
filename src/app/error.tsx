@@ -19,11 +19,11 @@ export default function RootError({
   return (
     <main className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center gap-4 px-6 text-center">
       <h1 className="text-2xl font-bold">Something went wrong</h1>
-      <p className="text-sm text-zinc-600">
+      <p className="text-sm text-stone-600">
         An unexpected error occurred. You can try again, or head back and sign in.
       </p>
       {process.env.NODE_ENV === "development" && (
-        <pre className="max-w-full overflow-x-auto rounded bg-zinc-100 p-3 text-left text-xs text-zinc-700">
+        <pre className="max-w-full overflow-x-auto rounded bg-stone-100 p-3 text-left text-xs text-stone-700">
           {error.message}
           {error.digest ? `\n\ndigest: ${error.digest}` : ""}
         </pre>

@@ -94,7 +94,7 @@ export default async function RolesPage() {
       <li className="flex items-center justify-between gap-3 py-3 text-sm">
         <div>
           <div className="font-medium">{request.title}</div>
-          <div className="text-zinc-500">
+          <div className="text-stone-500">
             {orgName}
             {request.expiresAt && ` · closes ${request.expiresAt.toLocaleDateString("en-AU")}`}
             {myResponse && ` · you responded (${myResponse.status.replace("_", " ")})`}
@@ -119,7 +119,7 @@ export default async function RolesPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">My roles</h1>
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-stone-500">
           Roles shared with you, roles you&apos;ve responded to, and roles listed by
           organisations you&apos;ve engaged with.
         </p>
@@ -131,9 +131,9 @@ export default async function RolesPage() {
         </CardHeader>
         <CardContent>
           {favourites.length === 0 ? (
-            <p className="text-sm text-zinc-500">No favourites yet.</p>
+            <p className="text-sm text-stone-500">No favourites yet.</p>
           ) : (
-            <ul className="divide-y divide-zinc-100">
+            <ul className="divide-y divide-stone-100">
               {favourites.map((r) => (
                 <RoleRow key={r.request.id} request={r.request} orgName={r.orgName} />
               ))}
@@ -148,9 +148,9 @@ export default async function RolesPage() {
         </CardHeader>
         <CardContent>
           {others.length === 0 ? (
-            <p className="text-sm text-zinc-500">Nothing else right now.</p>
+            <p className="text-sm text-stone-500">Nothing else right now.</p>
           ) : (
-            <ul className="divide-y divide-zinc-100">
+            <ul className="divide-y divide-stone-100">
               {others.map((r) => (
                 <RoleRow key={r.request.id} request={r.request} orgName={r.orgName} />
               ))}

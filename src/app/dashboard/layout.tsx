@@ -23,32 +23,36 @@ export default async function DashboardLayout({
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="border-b border-zinc-200 bg-white">
+      <header className="sticky top-0 z-20 border-b border-stone-200 bg-stone-50/85 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-6">
-            <Link href="/dashboard" className="flex items-center gap-2 font-semibold">
-              <ShieldCheck className="h-5 w-5" aria-hidden />
+          <div className="flex items-center gap-7">
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-2 font-semibold tracking-tight text-stone-900"
+            >
+              <ShieldCheck className="h-5 w-5 text-accent" aria-hidden />
               Recruvault
             </Link>
-            <nav className="flex items-center gap-4 text-sm text-zinc-600">
-              <Link href="/dashboard" className="hover:text-zinc-900">
+            <nav className="flex items-center gap-5 text-sm font-medium text-stone-600">
+              <Link href="/dashboard" className="transition-colors hover:text-accent">
                 Requests
               </Link>
               {can(ctx.role, "users:manage") && (
-                <Link href="/dashboard/settings" className="hover:text-zinc-900">
+                <Link href="/dashboard/settings" className="transition-colors hover:text-accent">
                   Settings
                 </Link>
               )}
               {can(ctx.role, "audit:view") && (
-                <Link href="/dashboard/audit" className="hover:text-zinc-900">
+                <Link href="/dashboard/audit" className="transition-colors hover:text-accent">
                   Audit
                 </Link>
               )}
             </nav>
           </div>
           <div className="flex items-center gap-3 text-sm">
-            <span className="text-zinc-500">
-              {ctx.orgName} · {ctx.role}
+            <span className="hidden text-stone-500 sm:inline">
+              {ctx.orgName} <span className="text-stone-300">·</span>{" "}
+              <span className="capitalize">{ctx.role}</span>
             </span>
             <SignOutButton />
           </div>

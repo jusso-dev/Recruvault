@@ -65,7 +65,7 @@ export default async function WalletPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Your wallet</h1>
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-stone-500">
           Enter your credentials once, reuse them across roles with explicit consent.
           Everything here is encrypted and private by default — nothing leaves the
           wallet until you consent to share it with a specific request. Wallet data is
@@ -79,14 +79,14 @@ export default async function WalletPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           {decrypted.length === 0 ? (
-            <p className="text-sm text-zinc-500">No credentials stored yet.</p>
+            <p className="text-sm text-stone-500">No credentials stored yet.</p>
           ) : (
-            <ul className="divide-y divide-zinc-100">
+            <ul className="divide-y divide-stone-100">
               {decrypted.map((item) => (
                 <li key={item.id} className="flex items-center justify-between py-2 text-sm">
                   <div>
                     <span className="font-medium">{item.label}</span>
-                    <span className="ml-2 text-zinc-500">{item.value}</span>
+                    <span className="ml-2 text-stone-500">{item.value}</span>
                   </div>
                   <ActionForm action={deleteWalletItem}>
                     <input type="hidden" name="id" value={item.id} />
@@ -130,14 +130,14 @@ export default async function WalletPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           {docs.length === 0 ? (
-            <p className="text-sm text-zinc-500">No documents stored yet.</p>
+            <p className="text-sm text-stone-500">No documents stored yet.</p>
           ) : (
-            <ul className="divide-y divide-zinc-100">
+            <ul className="divide-y divide-stone-100">
               {docs.map((d) => (
                 <li key={d.id} className="flex items-center justify-between py-2 text-sm">
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{d.kind.replace("_", " ")}</span>
-                    <span className="text-zinc-500">{d.fileName}</span>
+                    <span className="text-stone-500">{d.fileName}</span>
                     <Badge variant={statusBadgeVariant(d.scanStatus)}>{d.scanStatus}</Badge>
                   </div>
                   <div className="flex items-center gap-2">
@@ -189,11 +189,11 @@ export default async function WalletPage() {
         </CardHeader>
         <CardContent>
           {shares.length === 0 ? (
-            <p className="text-sm text-zinc-500">
+            <p className="text-sm text-stone-500">
               You haven&apos;t shared anything from your wallet yet.
             </p>
           ) : (
-            <ul className="divide-y divide-zinc-100">
+            <ul className="divide-y divide-stone-100">
               {shares.map(({ share, orgName }) => (
                 <li key={share.id} className="flex items-center justify-between py-2 text-sm">
                   <span>
@@ -222,7 +222,7 @@ export default async function WalletPage() {
           <CardTitle>Delete everything</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="mb-3 text-sm text-zinc-600">
+          <p className="mb-3 text-sm text-stone-600">
             Erase your wallet, documents, and submissions. Deletion is a crypto-shred —
             the encryption keys are destroyed and the data is unrecoverable. Type{" "}
             <strong>DELETE</strong> to confirm.

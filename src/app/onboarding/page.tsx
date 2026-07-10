@@ -25,7 +25,7 @@ export default async function OnboardingPage() {
       <Card className="w-full max-w-md">
         <CardContent className="space-y-4">
           <h1 className="text-xl font-semibold">Create your organisation</h1>
-          <p className="text-sm text-zinc-600">
+          <p className="text-sm text-stone-600">
             You&apos;ll be the owner: full control over users, roles, retention,
             and branding.
           </p>

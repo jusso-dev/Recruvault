@@ -115,10 +115,10 @@ export default async function RespondPage({
   return (
     <main className="mx-auto max-w-2xl space-y-6 p-4 py-8">
       <div>
-        <p className="text-sm text-zinc-500">{org.name} requests via Recruvault</p>
+        <p className="text-sm text-stone-500">{org.name} requests via Recruvault</p>
         <h1 className="text-2xl font-bold">{request.title}</h1>
         {request.description && (
-          <p className="mt-2 text-sm text-zinc-600">{request.description}</p>
+          <p className="mt-2 text-sm text-stone-600">{request.description}</p>
         )}
       </div>
 
@@ -126,13 +126,13 @@ export default async function RespondPage({
         <CardHeader>
           <CardTitle>Who is asking, and why</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2 text-sm text-zinc-700">
+        <CardContent className="space-y-2 text-sm text-stone-700">
           <p>
             <strong>{org.name}</strong> is requesting the information below for this
             role.
           </p>
           {request.consentPurpose && <p>{request.consentPurpose}</p>}
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-stone-500">
             Collection notice ({request.consentNoticeVersion}): your data is encrypted,
             visible only to authorised staff at {org.name}, never sent by email, and
             automatically deleted {org.retentionDays} days after submission. Every
@@ -147,7 +147,7 @@ export default async function RespondPage({
             <CardTitle>Job description</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="relative overflow-hidden rounded-lg border border-zinc-200">
+            <div className="relative overflow-hidden rounded-lg border border-stone-200">
               <object
                 data={`/api/documents/${jd.id}/view`}
                 type="application/pdf"
@@ -171,7 +171,7 @@ export default async function RespondPage({
                 className="pointer-events-none absolute inset-0 flex flex-wrap content-around items-center justify-around opacity-20"
               >
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <span key={i} className="rotate-[-20deg] text-xs font-semibold text-zinc-700">
+                  <span key={i} className="rotate-[-20deg] text-xs font-semibold text-stone-700">
                     {watermark}
                   </span>
                 ))}
@@ -185,7 +185,7 @@ export default async function RespondPage({
                 Download PDF
               </a>
             ) : (
-              <p className="mt-2 text-xs text-zinc-500">
+              <p className="mt-2 text-xs text-stone-500">
                 View-only: the recruiter has disabled downloading for this document.
               </p>
             )}
@@ -225,7 +225,7 @@ export default async function RespondPage({
                     )}
                   </Label>
                   {f.helpText && (
-                    <p className="mb-1 text-xs text-zinc-500">{f.helpText}</p>
+                    <p className="mb-1 text-xs text-stone-500">{f.helpText}</p>
                   )}
                   {f.type === "single_select" ? (
                     <Select id={name} name={name} defaultValue={pre?.value ?? ""} required={f.required}>
@@ -286,7 +286,7 @@ export default async function RespondPage({
             <Button type="submit" size="lg" className="w-full">
               Submit securely
             </Button>
-            <p className="text-center text-xs text-zinc-500">
+            <p className="text-center text-xs text-stone-500">
               Nothing is sent by email. Your submission goes straight into {org.name}
               &apos;s encrypted vault.
             </p>

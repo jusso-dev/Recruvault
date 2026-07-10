@@ -42,7 +42,7 @@ export default async function AuditPage({
           )}
         </div>
       </div>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-stone-500">
         Append-only and hash-chained. Events reference records by id only — no PII is
         ever written to the log, so it survives retention purges as a metadata-only
         record of handling.
@@ -51,7 +51,7 @@ export default async function AuditPage({
       <Card>
         <CardContent className="overflow-x-auto p-0">
           <table className="w-full text-sm">
-            <thead className="border-b border-zinc-200 text-left text-xs uppercase text-zinc-500">
+            <thead className="border-b border-stone-200 text-left text-xs uppercase text-stone-500">
               <tr>
                 <th className="px-4 py-2">Seq</th>
                 <th className="px-4 py-2">When</th>
@@ -61,16 +61,16 @@ export default async function AuditPage({
                 <th className="px-4 py-2">IP</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-100">
+            <tbody className="divide-y divide-stone-100">
               {events.map((e) => (
                 <tr key={e.id}>
-                  <td className="px-4 py-2 tabular-nums text-zinc-400">{e.seq}</td>
+                  <td className="px-4 py-2 tabular-nums text-stone-400">{e.seq}</td>
                   <td className="px-4 py-2 whitespace-nowrap">
                     {e.createdAt.toLocaleString("en-AU")}
                   </td>
                   <td className="px-4 py-2">{e.actorType}</td>
                   <td className="px-4 py-2 font-medium">{e.action}</td>
-                  <td className="px-4 py-2 text-zinc-500">
+                  <td className="px-4 py-2 text-stone-500">
                     {e.targetType}
                     {e.targetId && (
                       <span className="ml-1 font-mono text-xs">
@@ -78,20 +78,20 @@ export default async function AuditPage({
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-zinc-400">{e.ip ?? "—"}</td>
+                  <td className="px-4 py-2 text-stone-400">{e.ip ?? "—"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           {events.length === 0 && (
-            <p className="p-6 text-center text-sm text-zinc-500">No events yet.</p>
+            <p className="p-6 text-center text-sm text-stone-500">No events yet.</p>
           )}
         </CardContent>
       </Card>
 
       <div className="flex items-center justify-between">
         {beforeSeq !== undefined ? (
-          <Link href="/dashboard/audit" className="text-sm text-zinc-600 hover:underline">
+          <Link href="/dashboard/audit" className="text-sm text-stone-600 hover:underline">
             ← Newest
           </Link>
         ) : (
@@ -100,7 +100,7 @@ export default async function AuditPage({
         {hasMore && oldestSeq !== undefined && (
           <Link
             href={`/dashboard/audit?before=${oldestSeq}`}
-            className="text-sm text-zinc-600 hover:underline"
+            className="text-sm text-stone-600 hover:underline"
           >
             Older →
           </Link>

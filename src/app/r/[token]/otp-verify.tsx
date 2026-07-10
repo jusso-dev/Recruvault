@@ -70,7 +70,7 @@ export function OtpVerify({ token }: { token: string }) {
       <button
         type="button"
         onClick={sendCode}
-        className="w-full text-center text-sm text-zinc-500 underline"
+        className="w-full text-center text-sm text-stone-500 underline"
         disabled={busy}
       >
         Send a new code

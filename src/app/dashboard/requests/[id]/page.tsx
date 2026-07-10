@@ -77,7 +77,7 @@ export default async function RequestDetailPage({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">{request.title}</h1>
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-stone-500">
             {request.expiresAt && `Expires ${request.expiresAt.toLocaleDateString("en-AU")} · `}
             {request.listed ? "Listed" : "Private (link-only)"}
           </p>
@@ -114,7 +114,7 @@ export default async function RequestDetailPage({
                 <li key={f.id} className="flex items-center gap-2">
                   <span>{f.label}</span>
                   {f.sensitive && <Badge variant="amber">PII · encrypted</Badge>}
-                  {f.required && <span className="text-xs text-zinc-400">required</span>}
+                  {f.required && <span className="text-xs text-stone-400">required</span>}
                 </li>
               ))}
             </ul>
@@ -170,9 +170,9 @@ export default async function RequestDetailPage({
         </CardHeader>
         <CardContent>
           {dels.length === 0 ? (
-            <p className="text-sm text-zinc-500">Nothing sent yet.</p>
+            <p className="text-sm text-stone-500">Nothing sent yet.</p>
           ) : (
-            <ul className="divide-y divide-zinc-100 text-sm">
+            <ul className="divide-y divide-stone-100 text-sm">
               {dels.map((d) => {
                 const tok = tokenState.get(d.accessTokenId);
                 const revoked = !!tok?.revokedAt;
@@ -181,7 +181,7 @@ export default async function RequestDetailPage({
                 return (
                   <li key={d.id} className="flex items-center justify-between gap-2 py-2">
                     <span>
-                      {d.recipient} <span className="text-zinc-400">({d.channel})</span>
+                      {d.recipient} <span className="text-stone-400">({d.channel})</span>
                     </span>
                     <div className="flex items-center gap-2">
                       {revoked ? (
@@ -212,9 +212,9 @@ export default async function RequestDetailPage({
         </CardHeader>
         <CardContent>
           {subs.length === 0 ? (
-            <p className="text-sm text-zinc-500">No submissions yet.</p>
+            <p className="text-sm text-stone-500">No submissions yet.</p>
           ) : (
-            <ul className="divide-y divide-zinc-100 text-sm">
+            <ul className="divide-y divide-stone-100 text-sm">
               {subs.map((s) => (
                 <li key={s.id} className="flex items-center justify-between py-2">
                   <Link
@@ -222,7 +222,7 @@ export default async function RequestDetailPage({
                     className="font-medium underline-offset-2 hover:underline"
                   >
                     {s.purgedAt ? "Purged submission" : (s.responderEmail ?? "Submission")}
-                    <span className="ml-2 text-zinc-400">
+                    <span className="ml-2 text-stone-400">
                       {s.submittedAt?.toLocaleString("en-AU") ?? "in progress"}
                     </span>
                   </Link>

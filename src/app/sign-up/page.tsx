@@ -81,14 +81,14 @@ function SignUpForm() {
             {busy ? "Creating account…" : "Create account"}
           </Button>
         </form>
-        <p className="text-sm text-zinc-600">
+        <p className="text-sm text-stone-600">
           Already have an account?{" "}
           <Link href="/sign-in" className="font-medium underline">
             Sign in
           </Link>
         </p>
         {type === "seeker" && (
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-stone-500">
             Job seeker accounts and the wallet are free. Your data is private by
             default — nothing leaves your wallet without your explicit consent.
           </p>

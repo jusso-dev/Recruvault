@@ -61,7 +61,7 @@ export default async function NewRequestPage({
                 <div
                   key={t.id}
                   className={`flex items-center gap-1 rounded-full border px-1 ${
-                    t.id === selected?.id ? "border-zinc-800 bg-zinc-50" : "border-zinc-200"
+                    t.id === selected?.id ? "border-stone-800 bg-stone-50" : "border-stone-200"
                   }`}
                 >
                   <Link
@@ -78,7 +78,7 @@ export default async function NewRequestPage({
                         variant="ghost"
                         size="sm"
                         aria-label={`Delete template ${t.name}`}
-                        className="h-6 w-6 p-0 text-zinc-400"
+                        className="h-6 w-6 p-0 text-stone-400"
                       >
                         ×
                       </Button>
@@ -88,7 +88,7 @@ export default async function NewRequestPage({
               ))}
             </div>
             {selected ? (
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-stone-500">
                 Pre-filled from <span className="font-medium">{selected.name}</span>. Adjust
                 anything before creating.{" "}
                 <Link href="/dashboard/requests/new" className="underline">
@@ -96,7 +96,7 @@ export default async function NewRequestPage({
                 </Link>
               </p>
             ) : (
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-stone-500">
                 Pick a template to pre-fill the form below.
               </p>
             )}
@@ -132,7 +132,7 @@ export default async function NewRequestPage({
               <Label htmlFor="jd">Job description (PDF, stored encrypted)</Label>
               <Input id="jd" name="jd" type="file" accept="application/pdf" />
               {def && (
-                <p className="mt-1 text-xs text-zinc-500">
+                <p className="mt-1 text-xs text-stone-500">
                   Templates don&apos;t carry the JD file — attach one if needed.
                 </p>
               )}
@@ -153,7 +153,7 @@ export default async function NewRequestPage({
           </CardHeader>
           <CardContent className="space-y-4">
             <fieldset>
-              <legend className="mb-2 text-sm font-semibold text-zinc-700">
+              <legend className="mb-2 text-sm font-semibold text-stone-700">
                 Clearance
               </legend>
               <div className="space-y-2">
@@ -169,7 +169,7 @@ export default async function NewRequestPage({
                     <span>
                       {f.label}
                       {f.helpText && (
-                        <span className="block text-xs text-zinc-500">{f.helpText}</span>
+                        <span className="block text-xs text-stone-500">{f.helpText}</span>
                       )}
                     </span>
                   </label>
@@ -177,7 +177,7 @@ export default async function NewRequestPage({
               </div>
             </fieldset>
             <fieldset>
-              <legend className="mb-2 text-sm font-semibold text-zinc-700">
+              <legend className="mb-2 text-sm font-semibold text-stone-700">
                 Identity and eligibility
               </legend>
               <div className="space-y-2">
@@ -193,7 +193,7 @@ export default async function NewRequestPage({
                     <span>
                       {f.label}
                       {f.helpText && (
-                        <span className="block text-xs text-zinc-500">{f.helpText}</span>
+                        <span className="block text-xs text-stone-500">{f.helpText}</span>
                       )}
                     </span>
                   </label>
@@ -228,7 +228,7 @@ export default async function NewRequestPage({
             <div>
               <Label htmlFor="expiresAt">Link expiry</Label>
               <Input id="expiresAt" name="expiresAt" type="date" />
-              <p className="mt-1 text-xs text-zinc-500">
+              <p className="mt-1 text-xs text-stone-500">
                 Leave blank for the 14-day default. The link stops working after this.
               </p>
             </div>
