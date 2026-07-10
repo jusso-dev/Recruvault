@@ -85,7 +85,11 @@ export default async function NewRequestPage({
                     {t.name}
                   </Link>
                   {canManageTemplates && (
-                    <ActionForm action={deleteTemplate} className="flex">
+                    <ActionForm
+                      action={deleteTemplate}
+                      successMessage="Template deleted."
+                      className="flex"
+                    >
                       <input type="hidden" name="templateId" value={t.id} />
                       <Button
                         type="submit"

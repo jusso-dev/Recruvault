@@ -2,12 +2,13 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Building2, ShieldCheck } from "lucide-react";
+import { Building2 } from "lucide-react";
 import { completePlatformSetup } from "@/actions/setup";
 import { authClient } from "@/lib/auth-client";
 import { useToast } from "@/components/toast";
 import { userFacingError } from "@/lib/user-facing-errors";
 import { Button, Card, CardContent, Input, Label } from "@/components/ui";
+import { BrandMark } from "@/components/brand-mark";
 
 export function SetupForm() {
   const router = useRouter();
@@ -62,9 +63,7 @@ export function SetupForm() {
     <Card className="w-full max-w-2xl overflow-hidden">
       <div className="border-b border-stone-200 bg-stone-100/65 px-6 py-5">
         <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-md bg-accent-tint text-accent ring-1 ring-accent-tint-border">
-            <ShieldCheck className="h-5 w-5" aria-hidden />
-          </span>
+          <BrandMark size={40} />
           <div>
             <p className="font-semibold tracking-tight text-stone-950">Recruvault</p>
             <p className="text-xs text-stone-500">One-time workspace setup</p>

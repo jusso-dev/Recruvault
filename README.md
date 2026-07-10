@@ -1,5 +1,7 @@
 # Recruvault
 
+![Recruvault connects recruiter pipelines with secure job-seeker applications from application through placement](public/brand/recruvault-readme-banner.webp)
+
 **Recruiter + vault.** A free, open-source hiring workspace for cleared and government-adjacent recruitment. Recruiters manage roles and move candidates from application through review, shortlist, interview, offer, and placement. Job seekers track applications and keep reusable resumes, cover letters, and clearance details in one secure career record. Identity documents, right-to-work evidence, and police-check documents are never collected.
 
 This is a passion project: public, MIT-licensed, and self-hostable by anyone. Issues and pull requests are welcome.

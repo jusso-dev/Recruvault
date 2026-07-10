@@ -1,5 +1,6 @@
 import { BriefcaseBusiness, Files, ShieldCheck } from "lucide-react";
 import { ButtonLink, Card, CardContent } from "@/components/ui";
+import { BrandMark } from "@/components/brand-mark";
 
 export default function LandingPage() {
   return (
@@ -7,7 +8,7 @@ export default function LandingPage() {
       <header className="border-b border-stone-200 bg-white">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
           <div className="flex items-center gap-2 font-semibold text-lg">
-            <ShieldCheck className="h-6 w-6 text-accent" aria-hidden />
+            <BrandMark size={28} />
             Recruvault
           </div>
           <nav className="flex items-center gap-2">

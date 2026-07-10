@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { loadEnvConfig } from "@next/env";
 import { Client } from "pg";
 
@@ -18,6 +18,8 @@ export default async function globalSetup() {
   });
 
   mkdirSync(".playwright/auth", { recursive: true });
+  rmSync(".playwright/outbox", { recursive: true, force: true });
+  mkdirSync(".playwright/outbox", { recursive: true });
   // Playwright overwrites its own named screenshots. Keep manually captured
   // MCP/client screenshots that cannot be reproduced by the browser suite.
   mkdirSync("docs/screenshots", { recursive: true });
@@ -58,16 +60,7 @@ export default async function globalSetup() {
       where id in (${e2eOrgIds})
     `);
     await client.query(`delete from "user" where email like '%@e2e.recruvault.test'`);
-
-    // A brand-new installation correctly routes to /setup. The remaining
-    // browser tests exercise ordinary account registration, so initialize
-    // only a completely empty E2E database before those flows begin.
-    await client.query(`
-      insert into organisations (name, slug)
-      select 'E2E Platform Bootstrap', 'e2e-platform-bootstrap'
-      where not exists (select 1 from organisations)
-      on conflict (slug) do nothing
-    `);
+    await client.query(`delete from organisations where slug = 'e2e-platform-bootstrap'`);
   } finally {
     await client.end();
   }

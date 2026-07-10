@@ -12,12 +12,12 @@ import {
   LayoutDashboard,
   BellRing,
   Settings2,
-  ShieldCheck,
   type LucideIcon,
   WalletCards,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SignOutButton } from "@/components/sign-out";
+import { BrandMark } from "@/components/brand-mark";
 
 export type AppNavIcon =
   | "overview"
@@ -121,9 +121,7 @@ export function AppShell({
             href={brandHref}
             className="flex w-fit items-center gap-2.5 rounded-sm font-semibold tracking-[-0.02em] text-stone-950 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-accent-tint text-accent ring-1 ring-accent-tint-border">
-              <ShieldCheck className="h-[18px] w-[18px]" strokeWidth={2} aria-hidden />
-            </span>
+            <BrandMark size={32} />
             <span>Recruvault</span>
           </Link>
         </div>
@@ -156,7 +154,7 @@ export function AppShell({
         <header className="sticky top-0 z-20 border-b border-stone-200 bg-background/95 lg:hidden">
           <div className="flex items-center justify-between gap-3 px-4 py-3">
             <Link href={brandHref} className="flex items-center gap-2 font-semibold tracking-tight">
-              <ShieldCheck className="h-5 w-5 text-accent" aria-hidden />
+              <BrandMark size={24} />
               Recruvault
             </Link>
             <div className="flex items-center gap-2">

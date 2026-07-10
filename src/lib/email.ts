@@ -1,4 +1,7 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Resend } from "resend";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -69,6 +72,28 @@ interface EmailContent {
   code?: string;
 }
 
+/**
+ * Playwright's local mailbox. Production and ordinary development never write
+ * here; tests use it to follow the same links and OTPs a person receives.
+ */
+async function recordPlaywrightEmail(c: EmailContent) {
+  if (process.env.PLAYWRIGHT_TEST !== "1") return false;
+  const directory = join(process.cwd(), ".playwright", "outbox");
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, `${Date.now()}-${randomUUID()}.json`),
+    JSON.stringify({
+      to: c.to.toLowerCase(),
+      subject: c.subject,
+      ctaUrl: c.ctaUrl ?? null,
+      code: c.code ?? null,
+      createdAt: new Date().toISOString(),
+    }),
+    { encoding: "utf8", mode: 0o600 },
+  );
+  return true;
+}
+
 function renderHtml(c: EmailContent): string {
   // Plain, accessible, mobile-friendly: semantic HTML, strong contrast, minimal.
   return `<!doctype html>
@@ -112,6 +137,7 @@ function renderText(c: EmailContent): string {
 
 export async function sendEmail(c: EmailContent): Promise<string | null> {
   if (await isSuppressed(c.to)) return null;
+  if (await recordPlaywrightEmail(c)) return `playwright-${randomUUID()}`;
   if (!process.env.RESEND_API_KEY) {
     // Dev fallback: log instead of failing hard so local flows keep working.
     log.info(

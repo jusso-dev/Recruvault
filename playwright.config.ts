@@ -3,7 +3,9 @@ import { loadEnvConfig } from "@next/env";
 
 loadEnvConfig(process.cwd());
 
-const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3000";
+// Keep browser tests off the ordinary development port so the suite always
+// launches with its test mailbox, scanner, and Inngest configuration.
+const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3100";
 const serverURL = new URL(baseURL);
 const serverHostname = serverURL.hostname;
 const serverPort = serverURL.port || (serverURL.protocol === "https:" ? "443" : "80");
@@ -35,12 +37,12 @@ export default defineConfig({
       command: `npm run dev -- --hostname ${serverHostname} --port ${serverPort}`,
       url: baseURL,
       timeout: 120_000,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       env: {
         ...process.env,
         APP_URL: baseURL,
         ALLOW_RECRUITER_SIGNUP: "true",
-        INNGEST_DEV: "1",
+        INNGEST_DEV: "http://127.0.0.1:8289",
         NEXT_DIST_DIR: ".next-e2e",
         RESEND_API_KEY: "",
         SCAN_DISABLED: "true",
@@ -52,10 +54,10 @@ export default defineConfig({
     {
       name: "Inngest",
       command:
-        `npx inngest dev --no-discovery --sdk-url ${baseURL}/api/inngest --port 8288`,
-      url: "http://127.0.0.1:8288",
+        `npx inngest dev --no-discovery --sdk-url ${baseURL}/api/inngest --port 8289`,
+      url: "http://127.0.0.1:8289",
       timeout: 120_000,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       stdout: "ignore",
       stderr: "pipe",
     },
