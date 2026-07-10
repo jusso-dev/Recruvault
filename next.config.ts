@@ -15,7 +15,10 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        source: "/(.*)",
+        // Everything except the API docs page, which sets its own CSP so the
+        // self-contained Scalar reference can load without weakening the global
+        // policy.
+        source: "/((?!api/v1/docs).*)",
         headers: [
           // HSTS: TLS 1.2+ is enforced at the load balancer; this pins browsers.
           {

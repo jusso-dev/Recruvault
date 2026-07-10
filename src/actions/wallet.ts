@@ -1,10 +1,11 @@
 "use server";
 
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import {
+  discoveryProfiles,
   requests,
   savedRoles,
   walletDocuments,
@@ -274,6 +275,63 @@ export async function requestErasure(formData: FormData): Promise<ActionResult> 
 
   await eraseCandidate(ctx.candidateAccountId);
   await sendErasureConfirmation({ to: ctx.userEmail });
+
+  revalidatePath("/wallet");
+  return { ok: true };
+}
+
+/**
+ * Opt into (or out of) recruiter discovery and edit the plaintext profile that
+ * matching reads. Only the facts entered here are ever exposed, and only as an
+ * opaque handle. Never touches wallet ciphertext or documents.
+ */
+export async function upsertDiscoveryProfile(formData: FormData): Promise<ActionResult> {
+  const ctx = await requireCandidate();
+
+  const discoverable = formData.get("discoverable") === "on";
+  const clearanceLevel = String(formData.get("clearanceLevel") ?? "").trim() || null;
+  const citizenship = String(formData.get("citizenship") ?? "").trim() || null;
+  const rightToWork = String(formData.get("rightToWork") ?? "").trim() || null;
+  const location = String(formData.get("location") ?? "").trim() || null;
+  const skills = String(formData.get("skills") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 30);
+
+  const [existing] = await db
+    .select({ handle: discoveryProfiles.handle })
+    .from(discoveryProfiles)
+    .where(eq(discoveryProfiles.candidateAccountId, ctx.candidateAccountId));
+  const handle = existing?.handle ?? `cand_${randomBytes(5).toString("hex")}`;
+
+  await db
+    .insert(discoveryProfiles)
+    .values({
+      candidateAccountId: ctx.candidateAccountId,
+      handle,
+      discoverable,
+      clearanceLevel,
+      citizenship,
+      rightToWork,
+      skills,
+      location,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: discoveryProfiles.candidateAccountId,
+      set: { discoverable, clearanceLevel, citizenship, rightToWork, skills, location, updatedAt: new Date() },
+    });
+
+  const meta = await requestMeta();
+  await audit({
+    actorType: "candidate",
+    actorId: ctx.candidateAccountId,
+    action: discoverable ? "discovery.enabled" : "discovery.updated",
+    targetType: "discovery_profile",
+    targetId: ctx.candidateAccountId,
+    ...meta,
+  });
 
   revalidatePath("/wallet");
   return { ok: true };

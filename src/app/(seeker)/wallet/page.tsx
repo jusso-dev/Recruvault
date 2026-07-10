@@ -1,6 +1,12 @@
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { organisations, walletDocuments, walletItems, walletShares } from "@/db/schema";
+import {
+  discoveryProfiles,
+  organisations,
+  walletDocuments,
+  walletItems,
+  walletShares,
+} from "@/db/schema";
 import { requireCandidate } from "@/lib/guards";
 import { decryptField } from "@/lib/crypto";
 import { WALLET_ITEM_TYPES } from "@/lib/fields";
@@ -9,6 +15,7 @@ import {
   deleteWalletItem,
   requestErasure,
   revokeWalletShare,
+  upsertDiscoveryProfile,
   upsertWalletItem,
   uploadWalletDocument,
 } from "@/actions/wallet";
@@ -60,6 +67,11 @@ export default async function WalletPage() {
   const missingTypes = WALLET_ITEM_TYPES.filter(
     (t) => !items.some((i) => i.type === t.type),
   );
+
+  const [profile] = await db
+    .select()
+    .from(discoveryProfiles)
+    .where(eq(discoveryProfiles.candidateAccountId, ctx.candidateAccountId));
 
   return (
     <div className="space-y-6">
@@ -120,6 +132,76 @@ export default async function WalletPage() {
               <Input id="value" name="value" required />
             </div>
             <Button type="submit">Save</Button>
+          </ActionForm>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Discovery</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="mb-3 text-sm text-stone-600">
+            Opt in to let recruiters find you for suitable roles. Only the facts below
+            are shared, as an anonymous match. Your name, contact details, wallet
+            credentials, and documents are never exposed until you respond to a role.
+          </p>
+          <ActionForm action={upsertDiscoveryProfile} successMessage="Discovery updated." className="space-y-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                name="discoverable"
+                defaultChecked={profile?.discoverable ?? false}
+              />
+              Discoverable by recruiters
+            </label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="d_clearance">Clearance level</Label>
+                <Select id="d_clearance" name="clearanceLevel" defaultValue={profile?.clearanceLevel ?? ""}>
+                  <option value="">None / prefer not to say</option>
+                  <option value="baseline">Baseline</option>
+                  <option value="nv1">NV1</option>
+                  <option value="nv2">NV2</option>
+                  <option value="pv">Positive Vetting</option>
+                  <option value="tspa">TS-PA</option>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="d_citizenship">Citizenship</Label>
+                <Select id="d_citizenship" name="citizenship" defaultValue={profile?.citizenship ?? ""}>
+                  <option value="">Prefer not to say</option>
+                  <option value="au_citizen">Australian citizen</option>
+                  <option value="au_pr">Australian permanent resident</option>
+                  <option value="dual">Dual citizen (incl. Australian)</option>
+                  <option value="other">Other</option>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="d_rtw">Right to work</Label>
+                <Select id="d_rtw" name="rightToWork" defaultValue={profile?.rightToWork ?? ""}>
+                  <option value="">Prefer not to say</option>
+                  <option value="citizen">Citizen — unrestricted</option>
+                  <option value="pr">Permanent resident — unrestricted</option>
+                  <option value="visa_unrestricted">Visa — unrestricted</option>
+                  <option value="visa_restricted">Visa — restricted</option>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="d_location">General location</Label>
+                <Input id="d_location" name="location" defaultValue={profile?.location ?? ""} placeholder="Canberra, ACT" />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="d_skills">Skills (comma-separated)</Label>
+              <Input
+                id="d_skills"
+                name="skills"
+                defaultValue={(profile?.skills ?? []).join(", ")}
+                placeholder="systems engineering, ISM, AWS"
+              />
+            </div>
+            <Button type="submit">Save discovery profile</Button>
           </ActionForm>
         </CardContent>
       </Card>
