@@ -20,8 +20,10 @@ import {
 import {
   constantTimeEqualHex,
   createDataKey,
+  decryptFieldWithKey,
   encryptFieldWithKey,
   generateOtp,
+  getDataKey,
   sha256,
 } from "@/lib/crypto";
 import { issueLinkSession, readLinkSession, clearLinkSession } from "@/lib/link-session";
@@ -326,6 +328,12 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
         .returning({ id: accessTokens.id });
       if (consumed.length === 0) return { alreadyDone: true as const };
 
+      // Discard any saved draft for this link; the final submission (built from
+      // the submitted form) is authoritative. Cascade removes its draft values.
+      await tx
+        .delete(submissions)
+        .where(and(eq(submissions.accessTokenId, at.id), eq(submissions.status, "started")));
+
       const [submission] = await tx
         .insert(submissions)
         .values({
@@ -465,4 +473,135 @@ async function cleanupObjects(keys: string[]): Promise<void> {
       log.error({ key, err }, "failed to clean up uploaded object");
     }
   }
+}
+
+/**
+ * Save an in-progress response so the responder can finish later. Persists the
+ * structured (non-file) field values under a "started" submission for this
+ * link, without consuming the token or requiring consent. File uploads are
+ * re-attached on final submit. One draft per link (upsert).
+ */
+export async function saveDraft(formData: FormData): Promise<ActionResult> {
+  const accessTokenId = await readLinkSession();
+  if (!accessTokenId) return { ok: false, error: "Your session has expired. Reopen the link." };
+
+  const [at] = await db.select().from(accessTokens).where(eq(accessTokens.id, accessTokenId));
+  if (!at || !at.verifiedAt) return { ok: false, error: "Verification required." };
+  if (at.revokedAt) return { ok: false, error: "This link has been revoked by the sender." };
+  if (at.consumedAt) return { ok: false, error: "This request has already been completed." };
+  if (at.expiresAt < new Date()) return { ok: false, error: "This link has expired." };
+
+  const [request] = await db.select().from(requests).where(eq(requests.id, at.requestId));
+  if (!request) return { ok: false, error: "Not found." };
+
+  const fields = await db
+    .select()
+    .from(requestFields)
+    .where(eq(requestFields.requestId, request.id))
+    .orderBy(requestFields.sortOrder);
+
+  // Structured values only; drafts don't enforce required fields.
+  const values: { fieldId: string; raw: string }[] = [];
+  for (const f of fields) {
+    if (f.type === "file_upload") continue;
+    const raw = String(formData.get(`field_${f.id}`) ?? "").trim();
+    if (!raw) continue;
+    if (f.type === "date" && Number.isNaN(new Date(raw).getTime())) continue;
+    values.push({ fieldId: f.id, raw });
+  }
+
+  let candidateAccountId: string | null = null;
+  const session = await getSession();
+  if (session && (session.user as { accountType?: string }).accountType !== "org") {
+    const { requireCandidate } = await import("@/lib/guards");
+    candidateAccountId = (await requireCandidate()).candidateAccountId;
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ id: submissions.id })
+        .from(submissions)
+        .where(and(eq(submissions.accessTokenId, at.id), eq(submissions.status, "started")));
+
+      let submissionId: string;
+      let dek: Buffer;
+      let dekId: string;
+
+      if (existing) {
+        submissionId = existing.id;
+        const [prior] = await tx
+          .select({ dekId: submissionValues.dekId })
+          .from(submissionValues)
+          .where(eq(submissionValues.submissionId, submissionId))
+          .limit(1);
+        if (prior) {
+          dekId = prior.dekId;
+          dek = await getDataKey(dekId);
+        } else {
+          ({ dek, dekId } = await createDataKey(tx));
+        }
+        await tx.delete(submissionValues).where(eq(submissionValues.submissionId, submissionId));
+        await tx
+          .update(submissions)
+          .set({ updatedAt: new Date(), candidateAccountId })
+          .where(eq(submissions.id, submissionId));
+      } else {
+        const [ins] = await tx
+          .insert(submissions)
+          .values({
+            requestId: request.id,
+            candidateAccountId,
+            accessTokenId: at.id,
+            responderEmail: at.recipientEmail,
+            status: "started",
+          })
+          .returning({ id: submissions.id });
+        submissionId = ins.id;
+        ({ dek, dekId } = await createDataKey(tx));
+      }
+
+      if (values.length > 0) {
+        const rows = await Promise.all(
+          values.map(async (val) => ({
+            submissionId,
+            fieldId: val.fieldId,
+            valueEncrypted: await encryptFieldWithKey(val.raw, dek),
+            dekId,
+          })),
+        );
+        await tx.insert(submissionValues).values(rows);
+      }
+    });
+    return { ok: true };
+  } catch (err) {
+    log.error({ err, accessTokenId: at.id }, "saveDraft failed");
+    return { ok: false, error: "Could not save your draft. Please try again." };
+  }
+}
+
+/** Decrypted structured values of the saved draft for a link, keyed by fieldId. */
+export async function loadDraftValues(accessTokenId: string): Promise<Record<string, string>> {
+  const [draft] = await db
+    .select({ id: submissions.id })
+    .from(submissions)
+    .where(and(eq(submissions.accessTokenId, accessTokenId), eq(submissions.status, "started")));
+  if (!draft) return {};
+
+  const vals = await db
+    .select()
+    .from(submissionValues)
+    .where(eq(submissionValues.submissionId, draft.id));
+
+  const out: Record<string, string> = {};
+  const keyCache = new Map<string, Promise<Buffer>>();
+  for (const v of vals) {
+    let p = keyCache.get(v.dekId);
+    if (!p) {
+      p = getDataKey(v.dekId);
+      keyCache.set(v.dekId, p);
+    }
+    out[v.fieldId] = decryptFieldWithKey(v.valueEncrypted, await p);
+  }
+  return out;
 }

@@ -2,6 +2,7 @@ import "server-only";
 import { and, eq, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  accessTokens,
   documents,
   organisations,
   requests,
@@ -109,6 +110,22 @@ export async function findPurgeDueSubmissionIds(): Promise<string[]> {
 
     ids.push(...due.map((s) => s.id));
   }
+
+  // Abandoned drafts: "started" submissions whose secure link has expired and
+  // will never be submitted. Crypto-shred them like any other stale PII.
+  const staleDrafts = await db
+    .select({ id: submissions.id })
+    .from(submissions)
+    .innerJoin(accessTokens, eq(accessTokens.id, submissions.accessTokenId))
+    .where(
+      and(
+        eq(submissions.status, "started"),
+        isNull(submissions.purgedAt),
+        lt(accessTokens.expiresAt, new Date()),
+      ),
+    );
+  ids.push(...staleDrafts.map((s) => s.id));
+
   return ids;
 }
 

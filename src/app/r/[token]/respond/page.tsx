@@ -14,8 +14,9 @@ import { readLinkSession } from "@/lib/link-session";
 import { getSession, requireCandidate } from "@/lib/guards";
 import { loadOptions } from "@/lib/reference";
 import { fieldDefinition } from "@/lib/fields";
-import { submitResponse } from "@/actions/link";
+import { submitResponse, loadDraftValues } from "@/actions/link";
 import { ActionForm } from "@/components/action-form";
+import { SaveDraftButton } from "@/components/save-draft-button";
 import {
   Badge,
   Button,
@@ -105,6 +106,10 @@ export default async function RespondPage({
       }
     }
   }
+
+  // A previously saved draft (structured answers) for this link, if any.
+  const draft = await loadDraftValues(at.id);
+  const hasDraft = Object.keys(draft).length > 0;
 
   const jd = request.jdDocumentId
     ? (await db.select().from(documents).where(eq(documents.id, request.jdDocumentId)))[0]
@@ -203,16 +208,25 @@ export default async function RespondPage({
             <CardTitle>Requested information</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {hasDraft && (
+              <p className="rounded-lg border border-accent-tint-border bg-accent-tint p-3 text-sm text-accent">
+                We restored your saved draft. Review your answers, re-attach any files,
+                then submit.
+              </p>
+            )}
             {isCandidate && prefill.size > 0 && (
               <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">
                 {prefill.size} field{prefill.size === 1 ? "" : "s"} pre-filled from your
-                wallet. Review each value before you submit — sharing is recorded in
-                your consent ledger.
+                wallet. Review each value before you submit; sharing is recorded in your
+                consent ledger.
               </p>
             )}
             {fields.map((f) => {
               const pre = prefill.get(f.id);
               const name = `field_${f.id}`;
+              // A saved draft answer wins over wallet pre-fill (it's the
+              // responder's own edit); files are never carried in a draft.
+              const initial = draft[f.id] ?? pre?.value;
               return (
                 <div key={f.id}>
                   <Label htmlFor={name}>
@@ -228,7 +242,7 @@ export default async function RespondPage({
                     <p className="mb-1 text-xs text-stone-500">{f.helpText}</p>
                   )}
                   {f.type === "single_select" ? (
-                    <Select id={name} name={name} defaultValue={pre?.value ?? ""} required={f.required}>
+                    <Select id={name} name={name} defaultValue={initial ?? ""} required={f.required}>
                       <option value="">Select…</option>
                       {(optionsByField.get(f.id) ?? []).map((o) => (
                         <option key={o.code} value={o.code}>
@@ -237,7 +251,7 @@ export default async function RespondPage({
                       ))}
                     </Select>
                   ) : f.type === "long_text" ? (
-                    <Textarea id={name} name={name} defaultValue={pre?.value} required={f.required} />
+                    <Textarea id={name} name={name} defaultValue={initial} required={f.required} />
                   ) : f.type === "boolean" || f.type === "consent" ? (
                     <label className="flex items-center gap-2 text-sm">
                       <input type="checkbox" id={name} name={name} value="yes" />
@@ -248,7 +262,11 @@ export default async function RespondPage({
                       id={name}
                       name={name}
                       type="file"
-                      accept="application/pdf,image/*"
+                      accept={
+                        f.key === "resume"
+                          ? ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                          : "application/pdf,image/*"
+                      }
                       required={f.required}
                     />
                   ) : (
@@ -256,7 +274,7 @@ export default async function RespondPage({
                       id={name}
                       name={name}
                       type={f.type === "date" ? "date" : f.type === "number" ? "number" : "text"}
-                      defaultValue={pre?.value}
+                      defaultValue={initial}
                       required={f.required}
                     />
                   )}
@@ -286,6 +304,7 @@ export default async function RespondPage({
             <Button type="submit" size="lg" className="w-full">
               Submit securely
             </Button>
+            <SaveDraftButton />
             <p className="text-center text-xs text-stone-500">
               Nothing is sent by email. Your submission goes straight into {org.name}
               &apos;s encrypted vault.

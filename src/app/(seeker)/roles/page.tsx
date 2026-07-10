@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import {
   accessTokens,
@@ -39,6 +39,20 @@ export default async function RolesPage() {
     .from(submissions)
     .where(eq(submissions.candidateAccountId, ctx.candidateAccountId));
   const respondedIds = new Set(responded.map((r) => r.requestId));
+
+  // In-progress drafts (saved, not yet submitted).
+  const drafts = await db
+    .select({ title: requests.title, orgName: organisations.name, updatedAt: submissions.updatedAt })
+    .from(submissions)
+    .innerJoin(requests, eq(requests.id, submissions.requestId))
+    .innerJoin(organisations, eq(organisations.id, requests.orgId))
+    .where(
+      and(
+        eq(submissions.candidateAccountId, ctx.candidateAccountId),
+        eq(submissions.status, "started"),
+      ),
+    )
+    .orderBy(desc(submissions.updatedAt));
 
   const invited = await db
     .select({ requestId: accessTokens.requestId })
@@ -124,6 +138,33 @@ export default async function RolesPage() {
           organisations you&apos;ve engaged with.
         </p>
       </div>
+
+      {drafts.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Drafts in progress</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-y divide-stone-100">
+              {drafts.map((d, i) => (
+                <li key={i} className="flex items-center justify-between gap-3 py-3 text-sm">
+                  <div>
+                    <div className="font-medium">{d.title}</div>
+                    <div className="tnum text-stone-500">
+                      {d.orgName} · saved {new Date(d.updatedAt).toLocaleDateString("en-AU")}
+                    </div>
+                  </div>
+                  <Badge variant="amber">draft</Badge>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs text-stone-500">
+              Reopen the secure link we emailed you to finish and submit a draft before
+              it expires.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
