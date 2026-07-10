@@ -17,6 +17,9 @@ import type { Readable } from "stream";
  */
 
 const BUCKET = process.env.S3_BUCKET ?? "recruvault-documents";
+const USE_SERVER_SIDE_ENCRYPTION = process.env.S3_SERVER_SIDE_ENCRYPTION
+  ? process.env.S3_SERVER_SIDE_ENCRYPTION === "true"
+  : !process.env.S3_ENDPOINT;
 
 let s3: S3Client | undefined;
 function client() {
@@ -49,10 +52,10 @@ export async function putObjectBytes(
       Key: storageKey,
       Body: bytes,
       ContentType: contentType,
-      // SSE-S3 (AES-256) — provider-managed at-rest encryption that also works
-      // on MinIO. Objects hold only ciphertext (fields are already envelope
-      // encrypted before upload); this is defence in depth for the bucket.
-      ServerSideEncryption: "AES256",
+      // AWS S3 supports SSE-S3 without further configuration. Local MinIO does
+      // not unless a KMS is configured, so compatible endpoints can opt in via
+      // S3_SERVER_SIDE_ENCRYPTION=true.
+      ...(USE_SERVER_SIDE_ENCRYPTION ? { ServerSideEncryption: "AES256" as const } : {}),
     }),
   );
 }

@@ -8,13 +8,17 @@ import { requireOrgUser, requestMeta, AuthError } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { assertSubmissionAccess } from "@/lib/review";
 import { purgeSubmission } from "@/lib/retention";
+import {
+  RECRUITER_APPLICATION_STATUSES,
+  type RecruiterApplicationStatus,
+} from "@/lib/application-status";
 import type { ActionResult } from "./org";
 
 export async function setSubmissionStatus(formData: FormData): Promise<ActionResult> {
   const ctx = await requireOrgUser("submissions:view_own");
   const submissionId = String(formData.get("submissionId") ?? "");
   const status = String(formData.get("status") ?? "");
-  if (!["received", "under_review", "accepted", "follow_up"].includes(status)) {
+  if (!RECRUITER_APPLICATION_STATUSES.includes(status as RecruiterApplicationStatus)) {
     return { ok: false, error: "Invalid status." };
   }
 
@@ -30,7 +34,7 @@ export async function setSubmissionStatus(formData: FormData): Promise<ActionRes
 
   await db
     .update(submissions)
-    .set({ status: status as "received" | "under_review" | "accepted" | "follow_up" })
+    .set({ status: status as RecruiterApplicationStatus, updatedAt: new Date() })
     .where(eq(submissions.id, submissionId));
 
   const meta = await requestMeta();
@@ -45,6 +49,10 @@ export async function setSubmissionStatus(formData: FormData): Promise<ActionRes
   });
 
   revalidatePath(`/dashboard/requests/${sub.request.id}/submissions/${submissionId}`);
+  revalidatePath(`/dashboard/requests/${sub.request.id}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/overview");
+  revalidatePath("/roles");
   return { ok: true };
 }
 

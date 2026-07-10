@@ -13,6 +13,13 @@ export async function GET(req: NextRequest) {
       .select({
         id: requests.id,
         title: requests.title,
+        location: requests.location,
+        employmentType: requests.employmentType,
+        workArrangement: requests.workArrangement,
+        salaryMin: requests.salaryMin,
+        salaryMax: requests.salaryMax,
+        salaryPeriod: requests.salaryPeriod,
+        skills: requests.skills,
         status: requests.status,
         listed: requests.listed,
         expiresAt: requests.expiresAt,
@@ -34,12 +41,18 @@ export async function POST(req: NextRequest) {
     const id = await createRequestCore(ctx, {
       title: String(body.title ?? ""),
       description: body.description ?? null,
+      location: body.location ? String(body.location) : null,
+      employmentType: body.employmentType ? String(body.employmentType) : null,
+      workArrangement: body.workArrangement ? String(body.workArrangement) : null,
+      salaryMin: Number.isInteger(body.salaryMin) ? body.salaryMin : null,
+      salaryMax: Number.isInteger(body.salaryMax) ? body.salaryMax : null,
+      salaryPeriod: body.salaryPeriod ? String(body.salaryPeriod) : null,
+      skills: Array.isArray(body.skills) ? body.skills.map(String) : [],
       consentPurpose: body.consentPurpose ?? null,
       listed: !!body.listed,
       jdViewMode: body.jdViewMode === "allow_download" ? "allow_download" : "view_only",
       expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
       fieldKeys: Array.isArray(body.fieldKeys) ? body.fieldKeys.map(String) : [],
-      customLabels: Array.isArray(body.customLabels) ? body.customLabels.map(String) : [],
       includeDefaults: body.includeDefaults !== false,
     });
     return json({ id }, 201);

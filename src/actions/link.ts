@@ -255,7 +255,9 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
       const sniffed = sniffContentType(bytes);
       const allowed = allowedTypesForField(f.key);
       if (!sniffed || !allowed.includes(sniffed)) {
-        const hint = f.key === "resume" ? "a PDF or Word document" : "a PDF or an image";
+        const hint = ["resume", "cover_letter"].includes(f.key)
+          ? "a PDF or Word document"
+          : "a PDF or an image";
         return { ok: false, error: `"${f.label}" must be ${hint}.` };
       }
       preparedUploads.push({

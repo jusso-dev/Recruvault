@@ -27,6 +27,7 @@ const EXPECTED: Record<OrgRole, Permission[]> = {
     "submissions:view_shared",
     "documents:view",
     "export:data",
+    "api:manage",
   ],
   reviewer: ["submissions:view_shared"],
   compliance: [

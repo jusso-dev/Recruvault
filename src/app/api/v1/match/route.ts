@@ -16,8 +16,6 @@ export async function POST(req: NextRequest) {
     const matches = await matchCandidates(
       {
         clearanceLevel: body.clearanceLevel ? String(body.clearanceLevel) : null,
-        citizenship: body.citizenship ? String(body.citizenship) : null,
-        rightToWork: body.rightToWork ? String(body.rightToWork) : null,
         skills: Array.isArray(body.skills) ? body.skills.map(String) : [],
       },
       Math.min(Number(body.limit) || 20, 50),

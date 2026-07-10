@@ -19,6 +19,7 @@ const schema = z
     APP_URL: z.string().url().default("http://localhost:3000"),
     BETTER_AUTH_SECRET: z.string().min(32, "BETTER_AUTH_SECRET must be at least 32 chars"),
     LINK_SESSION_SECRET: z.string().min(32).optional(),
+    ALLOW_RECRUITER_SIGNUP: boolish,
 
     // Encryption. Self-managed master key (KEK); no external KMS. Keep it
     // secret and backed up — losing it makes all ciphertext unrecoverable.
@@ -31,6 +32,7 @@ const schema = z
     S3_BUCKET: z.string().min(1),
     S3_ENDPOINT: z.string().url().optional(),
     S3_FORCE_PATH_STYLE: boolish,
+    S3_SERVER_SIDE_ENCRYPTION: boolish,
     AWS_ACCESS_KEY_ID: z.string().optional(),
     AWS_SECRET_ACCESS_KEY: z.string().optional(),
 
@@ -41,6 +43,7 @@ const schema = z
 
     // Email / SMS
     RESEND_API_KEY: z.string().optional(),
+    RESEND_FROM_EMAIL: z.string().email().optional(),
     RESEND_WEBHOOK_SECRET: z.string().optional(),
     SHARED_SENDING_DOMAIN: z.string().default("mail.recruvault.example"),
     SMS_ENABLED: boolish,

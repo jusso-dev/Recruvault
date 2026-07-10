@@ -33,6 +33,9 @@ export async function createOrganisation(formData: FormData): Promise<ActionResu
   if ((session.user as { accountType?: string }).accountType !== "org") {
     return { ok: false, error: "Organisation account required." };
   }
+  if (!(session.user as { emailVerified?: boolean }).emailVerified) {
+    return { ok: false, error: "Verify your email address before continuing." };
+  }
 
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return { ok: false, error: "Organisation name is required." };

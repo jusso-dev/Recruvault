@@ -6,9 +6,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 /**
- * Recruvault MCP server. Wraps the Recruvault v1 REST API so a recruiter's
- * agent (Claude Code, Codex) can create requests, upload job descriptions,
- * find opted-in candidates, and send secure links.
+ * Recruvault MCP server. Wraps the v1 REST API for recruiter and job-seeker
+ * agents. The API key determines which tools can access data.
  *
  * Config (env):
  *   RECRUVAULT_URL       base URL (default http://localhost:3000)
@@ -56,14 +55,22 @@ const server = new McpServer({ name: "recruvault", version: "1.0.0" });
 server.registerTool(
   "create_request",
   {
-    title: "Create a secure request",
+    title: "Create a role",
     description:
-      "Create a request that collects clearance/identity/right-to-work evidence. Resume + suitability statement are added by default.",
+      "Create a role that may request clearance level, clearance ID, resume, and cover letter/suitability statement. Resume and cover letter are added by default.",
     inputSchema: {
       title: z.string(),
       description: z.string().optional(),
-      fieldKeys: z.array(z.string()).optional(),
-      customLabels: z.array(z.string()).optional(),
+      location: z.string().optional(),
+      employmentType: z.enum(["permanent", "contract", "fixed_term", "casual"]).optional(),
+      workArrangement: z.enum(["on_site", "hybrid", "remote"]).optional(),
+      salaryMin: z.number().int().nonnegative().optional(),
+      salaryMax: z.number().int().nonnegative().optional(),
+      salaryPeriod: z.enum(["annual", "daily", "hourly"]).optional(),
+      skills: z.array(z.string().max(80)).max(30).optional(),
+      fieldKeys: z
+        .array(z.enum(["clearance_level", "clearance_id", "resume", "cover_letter"]))
+        .optional(),
       listed: z.boolean().optional(),
       expiresAt: z.string().optional(),
     },
@@ -104,8 +111,6 @@ server.registerTool(
       "Match a role's requirements against opted-in job seekers. Returns opaque handles and match detail only (no PII).",
     inputSchema: {
       clearanceLevel: z.enum(["baseline", "nv1", "nv2", "pv", "tspa"]).optional(),
-      citizenship: z.string().optional(),
-      rightToWork: z.string().optional(),
       skills: z.array(z.string()).optional(),
       limit: z.number().optional(),
     },
@@ -167,6 +172,93 @@ server.registerTool(
   async ({ requestId }) => {
     try {
       return ok(await api(`/requests/${requestId}/submissions`));
+    } catch (err) {
+      return fail(err);
+    }
+  },
+);
+
+server.registerTool(
+  "get_recruiter_report",
+  {
+    title: "Get recruiter operations report",
+    description:
+      "Get a detailed, read-only recruiter report covering active and unfilled roles, last-month applications, job seekers still owing information, stage aging, application velocity, matched-alert performance, candidates needing action, deadlines, and prioritised work for this week. Use this tool for workload, caseload, outstanding-information, placement, trend, risk, and priority questions.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await api("/reports/recruiter"));
+    } catch (err) {
+      return fail(err);
+    }
+  },
+);
+
+server.registerTool(
+  "list_applications",
+  {
+    title: "List my applications",
+    description: "List the authenticated job seeker's applications and current placement stages.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await api("/me/applications"));
+    } catch (err) {
+      return fail(err);
+    }
+  },
+);
+
+server.registerTool(
+  "list_career_documents",
+  {
+    title: "List my career documents",
+    description: "List resume and cover-letter metadata and security-scan state for the authenticated job seeker.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await api("/me/documents"));
+    } catch (err) {
+      return fail(err);
+    }
+  },
+);
+
+server.registerTool(
+  "get_profile",
+  {
+    title: "Get my discovery profile",
+    description: "Read the authenticated job seeker's recruiter-discovery preferences.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await api("/me/profile"));
+    } catch (err) {
+      return fail(err);
+    }
+  },
+);
+
+server.registerTool(
+  "update_profile",
+  {
+    title: "Update my discovery profile",
+    description:
+      "Update discoverability, clearance level, skills, and general location. Identity and background-check information is not accepted.",
+    inputSchema: {
+      discoverable: z.boolean().optional(),
+      clearanceLevel: z.enum(["baseline", "nv1", "nv2", "pv", "tspa"]).nullable().optional(),
+      skills: z.array(z.string()).max(30).optional(),
+      location: z.string().max(120).nullable().optional(),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await api("/me/profile", { method: "PATCH", body: args }));
     } catch (err) {
       return fail(err);
     }

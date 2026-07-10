@@ -12,8 +12,17 @@ import {
 import type { OrgContext } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { sendEvent } from "@/inngest/client";
-import { fieldDefinition, DEFAULT_REQUEST_FIELD_KEYS } from "@/lib/fields";
+import {
+  fieldDefinition,
+  DEFAULT_REQUEST_FIELD_KEYS,
+  ROLE_REQUEST_FIELD_KEYS,
+} from "@/lib/fields";
 import { ApiError } from "@/lib/api/http";
+import {
+  EMPLOYMENT_TYPES,
+  SALARY_PERIODS,
+  WORK_ARRANGEMENTS,
+} from "@/lib/role-metadata";
 
 /**
  * Shared request logic used by both the dashboard server actions and the REST
@@ -23,13 +32,19 @@ import { ApiError } from "@/lib/api/http";
 export interface CreateRequestInput {
   title: string;
   description?: string | null;
+  location?: string | null;
+  employmentType?: string | null;
+  workArrangement?: string | null;
+  salaryMin?: number | null;
+  salaryMax?: number | null;
+  salaryPeriod?: string | null;
+  skills?: string[];
   consentPurpose?: string | null;
   listed?: boolean;
   jdViewMode?: "view_only" | "allow_download";
   expiresAt?: Date | null;
   fieldKeys?: string[];
-  customLabels?: string[];
-  /** Append resume + suitability statement if not already present. */
+  /** Append resume + cover letter/suitability statement if not already present. */
   includeDefaults?: boolean;
 }
 
@@ -39,13 +54,51 @@ export async function createRequestCore(
 ): Promise<string> {
   const title = input.title.trim();
   if (!title) throw new ApiError(400, "title is required.");
+  if (
+    input.employmentType &&
+    !EMPLOYMENT_TYPES.includes(input.employmentType as (typeof EMPLOYMENT_TYPES)[number])
+  ) {
+    throw new ApiError(400, "Unsupported employmentType.");
+  }
+  if (
+    input.workArrangement &&
+    !WORK_ARRANGEMENTS.includes(input.workArrangement as (typeof WORK_ARRANGEMENTS)[number])
+  ) {
+    throw new ApiError(400, "Unsupported workArrangement.");
+  }
+  if (
+    input.salaryPeriod &&
+    !SALARY_PERIODS.includes(input.salaryPeriod as (typeof SALARY_PERIODS)[number])
+  ) {
+    throw new ApiError(400, "Unsupported salaryPeriod.");
+  }
+  if (
+    (input.salaryMin != null && (!Number.isInteger(input.salaryMin) || input.salaryMin < 0)) ||
+    (input.salaryMax != null && (!Number.isInteger(input.salaryMax) || input.salaryMax < 0)) ||
+    (input.salaryMin != null && input.salaryMax != null && input.salaryMin > input.salaryMax)
+  ) {
+    throw new ApiError(400, "Invalid salary or rate range.");
+  }
 
   const keys = new Set([...(input.fieldKeys ?? [])]);
+  const skills = [...new Set((input.skills ?? []).map((skill) => skill.trim()).filter(Boolean))]
+    .slice(0, 30);
+  if (skills.some((skill) => skill.length > 80)) {
+    throw new ApiError(400, "Each skill or keyword must be 80 characters or fewer.");
+  }
   if (input.includeDefaults !== false) {
     for (const k of DEFAULT_REQUEST_FIELD_KEYS) keys.add(k);
   }
-  const customLabels = (input.customLabels ?? []).map((l) => l.trim()).filter(Boolean);
-  if (keys.size === 0 && customLabels.length === 0) {
+  const invalidKey = [...keys].find(
+    (key) => !ROLE_REQUEST_FIELD_KEYS.includes(key as (typeof ROLE_REQUEST_FIELD_KEYS)[number]),
+  );
+  if (invalidKey) {
+    throw new ApiError(
+      400,
+      "Roles may only request clearance level, clearance ID, resume, and cover letter/suitability statement.",
+    );
+  }
+  if (keys.size === 0) {
     throw new ApiError(400, "Select at least one field to request.");
   }
 
@@ -56,6 +109,13 @@ export async function createRequestCore(
       createdBy: ctx.userId,
       title,
       description: input.description ?? null,
+      location: input.location ?? null,
+      employmentType: input.employmentType ?? null,
+      workArrangement: input.workArrangement ?? null,
+      salaryMin: input.salaryMin ?? null,
+      salaryMax: input.salaryMax ?? null,
+      salaryPeriod: input.salaryPeriod ?? null,
+      skills,
       status: "open",
       listed: input.listed ?? false,
       expiresAt: input.expiresAt ?? null,
@@ -80,18 +140,6 @@ export async function createRequestCore(
       sortOrder: sortOrder++,
     });
   }
-  for (const label of customLabels) {
-    await db.insert(requestFields).values({
-      requestId: request.id,
-      key: "custom",
-      type: "short_text",
-      label,
-      required: false,
-      sensitive: false,
-      sortOrder: sortOrder++,
-    });
-  }
-
   await audit({
     orgId: ctx.orgId,
     actorType: "org_user",
@@ -100,6 +148,10 @@ export async function createRequestCore(
     targetType: "request",
     targetId: request.id,
   });
+
+  if ((input.listed ?? false) && skills.length > 0) {
+    await sendEvent("job-alert/role-listed", { requestId: request.id });
+  }
 
   return request.id;
 }

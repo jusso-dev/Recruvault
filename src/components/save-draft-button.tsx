@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { saveDraft } from "@/actions/link";
 import { Button } from "@/components/ui";
+import { useToast } from "@/components/toast";
+import { userFacingError } from "@/lib/user-facing-errors";
 
 /**
  * Saves the enclosing form's structured answers as a draft without submitting.
@@ -11,10 +13,10 @@ import { Button } from "@/components/ui";
  */
 export function SaveDraftButton() {
   const [pending, start] = useTransition();
-  const [state, setState] = useState<"idle" | "saved" | "error">("idle");
+  const { showToast } = useToast();
 
   return (
-    <div className="space-y-1">
+    <div>
       <Button
         type="button"
         variant="secondary"
@@ -25,26 +27,30 @@ export function SaveDraftButton() {
           const form = e.currentTarget.form;
           if (!form) return;
           const fd = new FormData(form);
-          setState("idle");
           start(async () => {
-            const res = await saveDraft(fd);
-            setState(res.ok ? "saved" : "error");
+            try {
+              const res = await saveDraft(fd);
+              if (!res.ok) {
+                showToast({
+                  tone: "error",
+                  message: userFacingError(res.error, "We couldn’t save your draft. Please try again."),
+                });
+                return;
+              }
+              showToast({
+                tone: "success",
+                title: "Draft saved",
+                message:
+                  "Reopen this link before it expires to finish. You’ll need to attach files again when you submit.",
+              });
+            } catch (error) {
+              showToast({ tone: "error", message: userFacingError(error) });
+            }
           });
         }}
       >
         {pending ? "Saving…" : "Save and finish later"}
       </Button>
-      {state === "saved" && (
-        <p className="text-center text-xs text-emerald-700">
-          Draft saved. Reopen this link any time before it expires to finish. Files
-          need to be re-attached when you submit.
-        </p>
-      )}
-      {state === "error" && (
-        <p className="text-center text-xs text-red-600">
-          Could not save your draft. Please try again.
-        </p>
-      )}
     </div>
   );
 }

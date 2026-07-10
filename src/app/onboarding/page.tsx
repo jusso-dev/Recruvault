@@ -11,7 +11,10 @@ export default async function OnboardingPage() {
   const session = await getSession();
   if (!session) redirect("/sign-in");
   if ((session.user as { accountType?: string }).accountType !== "org") {
-    redirect("/wallet");
+    redirect("/overview");
+  }
+  if (!(session.user as { emailVerified?: boolean }).emailVerified) {
+    redirect("/verify-email");
   }
 
   const [existing] = await db

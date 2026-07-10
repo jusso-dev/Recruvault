@@ -1,6 +1,6 @@
 /**
  * Seed the platform reference data (org_id null): AGSVA clearance levels,
- * clearance statuses, citizenship, right-to-work, police check, ID types.
+ * clearance levels.
  * Idempotent — safe to run on every deploy. Run: npm run db:seed
  */
 import { and, eq, isNull } from "drizzle-orm";

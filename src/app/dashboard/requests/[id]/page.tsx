@@ -3,13 +3,16 @@ import { notFound } from "next/navigation";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { accessTokens, deliveries, requestFields, requests, submissions } from "@/db/schema";
-import { requireOrgUser } from "@/lib/guards";
+import { requireDashboardUser } from "@/lib/dashboard-auth";
 import { can } from "@/lib/rbac";
+import { applicationStatusLabel } from "@/lib/application-status";
 import { revokeAccessToken, sendRequest, setRequestStatus } from "@/actions/requests";
 import { ActionForm } from "@/components/action-form";
+import { formatSalaryRange, roleMetadataLabel } from "@/lib/role-metadata";
 import {
   Badge,
   Button,
+  ButtonLink,
   Card,
   CardContent,
   CardHeader,
@@ -26,7 +29,7 @@ export default async function RequestDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const ctx = await requireOrgUser();
+  const ctx = await requireDashboardUser();
 
   const [request] = await db
     .select()
@@ -77,10 +80,18 @@ export default async function RequestDetailPage({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">{request.title}</h1>
-          <p className="text-sm text-stone-500">
-            {request.expiresAt && `Expires ${request.expiresAt.toLocaleDateString("en-AU")} · `}
-            {request.listed ? "Listed" : "Private (link-only)"}
-          </p>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-stone-500">
+            {request.location && <span>{request.location}</span>}
+            {request.employmentType && <span>{roleMetadataLabel(request.employmentType)}</span>}
+            {request.workArrangement && <span>{roleMetadataLabel(request.workArrangement)}</span>}
+            {formatSalaryRange(request.salaryMin, request.salaryMax, request.salaryPeriod) && (
+              <span>{formatSalaryRange(request.salaryMin, request.salaryMax, request.salaryPeriod)}</span>
+            )}
+            {request.expiresAt && (
+              <span>Expires {request.expiresAt.toLocaleDateString("en-AU")}</span>
+            )}
+            <span>{request.listed ? "Listed" : "Private (link-only)"}</span>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <Badge variant={statusBadgeVariant(request.status)}>
@@ -88,16 +99,12 @@ export default async function RequestDetailPage({
           </Badge>
           {canExport && (
             <>
-              <a href={`/api/requests/${id}/export?format=csv`}>
-                <Button variant="secondary" size="sm">
-                  Export CSV
-                </Button>
-              </a>
-              <a href={`/api/requests/${id}/export?format=json`}>
-                <Button variant="secondary" size="sm">
-                  Export JSON
-                </Button>
-              </a>
+              <ButtonLink href={`/api/requests/${id}/export?format=csv`} variant="secondary" size="sm">
+                Export CSV
+              </ButtonLink>
+              <ButtonLink href={`/api/requests/${id}/export?format=json`} variant="secondary" size="sm">
+                Export JSON
+              </ButtonLink>
             </>
           )}
         </div>
@@ -129,7 +136,7 @@ export default async function RequestDetailPage({
             <CardContent className="space-y-4">
               <ActionForm
                 action={sendRequest}
-                successMessage="Queued — the secure link is on its way."
+                successMessage="Queued. The secure link is on its way."
                 resetOnSuccess
                 className="space-y-3"
               >
@@ -144,7 +151,11 @@ export default async function RequestDetailPage({
                 </div>
                 <Button type="submit">Send</Button>
               </ActionForm>
-              <ActionForm action={setRequestStatus} className="flex items-end gap-2">
+              <ActionForm
+                action={setRequestStatus}
+                successMessage="Role status updated."
+                className="flex items-end gap-2"
+              >
                 <input type="hidden" name="requestId" value={request.id} />
                 <div className="flex-1">
                   <Label htmlFor="status">Status</Label>
@@ -190,7 +201,7 @@ export default async function RequestDetailPage({
                         <Badge variant={statusBadgeVariant(d.status)}>{d.status}</Badge>
                       )}
                       {canRevoke && (
-                        <ActionForm action={revokeAccessToken}>
+                        <ActionForm action={revokeAccessToken} successMessage="Secure link revoked.">
                           <input type="hidden" name="accessTokenId" value={d.accessTokenId} />
                           <Button type="submit" variant="secondary" size="sm">
                             Revoke
@@ -227,7 +238,7 @@ export default async function RequestDetailPage({
                     </span>
                   </Link>
                   <Badge variant={statusBadgeVariant(s.status)}>
-                    {s.status.replace("_", " ")}
+                    {applicationStatusLabel(s.status)}
                   </Badge>
                 </li>
               ))}

@@ -5,6 +5,7 @@ import { walletDocuments } from "@/db/schema";
 import { requireCandidate, requestMeta, AuthError } from "@/lib/guards";
 import { getObjectStream } from "@/lib/storage";
 import { audit } from "@/lib/audit";
+import { CAREER_DOCUMENT_KINDS } from "@/lib/fields";
 
 /** Wallet documents are visible only to their owner. */
 export async function GET(
@@ -25,6 +26,9 @@ export async function GET(
   const [doc] = await db.select().from(walletDocuments).where(eq(walletDocuments.id, id));
   if (!doc || doc.candidateAccountId !== ctx.candidateAccountId) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  if (!CAREER_DOCUMENT_KINDS.has(doc.kind)) {
+    return NextResponse.json({ error: "That document type is no longer supported." }, { status: 410 });
   }
   if (doc.scanStatus !== "clean") {
     return NextResponse.json({ error: "Document is not available." }, { status: 409 });

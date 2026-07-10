@@ -70,6 +70,7 @@ const ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
     "submissions:view_shared",
     "documents:view",
     "export:data",
+    "api:manage",
     // "export:documents" is by org policy for recruiters; enforced at the
     // export call site, not granted as a blanket permission here.
   ],

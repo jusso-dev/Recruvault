@@ -10,8 +10,10 @@ const scriptSrc = isDev
 const connectSrc = isDev ? "connect-src 'self' ws:" : "connect-src 'self'";
 
 const nextConfig: NextConfig = {
+  distDir: process.env.NEXT_DIST_DIR ?? ".next",
   output: "standalone",
   poweredByHeader: false,
+  devIndicators: process.env.PLAYWRIGHT_TEST === "1" ? false : undefined,
   async headers() {
     return [
       {

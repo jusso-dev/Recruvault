@@ -25,6 +25,12 @@ export const eventSchemas = {
   "submission/received": z.object({
     submissionId: z.string().uuid(),
   }),
+  "job-alert/role-listed": z.object({
+    requestId: z.string().uuid(),
+  }),
+  "job-alert/subscription-updated": z.object({
+    candidateAccountId: z.string().uuid(),
+  }),
   "retention/purge.submission": z.object({
     submissionId: z.string().uuid(),
   }),

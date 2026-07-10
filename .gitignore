@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+/mcp/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -12,9 +13,13 @@
 
 # testing
 /coverage
+/playwright-report/
+/test-results/
+/.playwright/
 
 # next.js
 /.next/
+/.next-e2e/
 /out/
 
 # production

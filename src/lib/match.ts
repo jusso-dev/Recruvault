@@ -20,8 +20,6 @@ function clearanceRank(code?: string | null): number {
 
 export interface MatchRequirements {
   clearanceLevel?: string | null;
-  citizenship?: string | null;
-  rightToWork?: string | null;
   skills?: string[];
 }
 
@@ -36,8 +34,8 @@ export interface CandidateMatch {
 
 /**
  * Score discoverable candidates against a set of requirements. Score is the
- * fraction of specified criteria met (clearance meets-or-exceeds, citizenship
- * and right-to-work exact, skills by overlap). Only positive matches returned.
+ * fraction of specified criteria met (clearance meets-or-exceeds and skills by
+ * overlap). Only positive matches are returned.
  */
 export async function matchCandidates(
   req: MatchRequirements,
@@ -53,8 +51,6 @@ export async function matchCandidates(
 export interface ScorableProfile {
   handle: string;
   clearanceLevel: string | null;
-  citizenship: string | null;
-  rightToWork: string | null;
   skills: string[] | null;
   location: string | null;
 }
@@ -76,18 +72,6 @@ export function rankProfiles(
       criteria++;
       if (clearanceRank(p.clearanceLevel) >= clearanceRank(req.clearanceLevel)) {
         matched.push("clearance");
-      }
-    }
-    if (req.citizenship) {
-      criteria++;
-      if ((p.citizenship ?? "").toLowerCase() === req.citizenship.toLowerCase()) {
-        matched.push("citizenship");
-      }
-    }
-    if (req.rightToWork) {
-      criteria++;
-      if ((p.rightToWork ?? "").toLowerCase() === req.rightToWork.toLowerCase()) {
-        matched.push("right_to_work");
       }
     }
     if (reqSkills.length) {

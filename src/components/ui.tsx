@@ -1,4 +1,5 @@
 import * as React from "react";
+import Link, { type LinkProps } from "next/link";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
@@ -11,7 +12,7 @@ const focusRing =
 const buttonVariants = cva(
   cn(
     "inline-flex items-center justify-center gap-2 rounded-md text-sm font-semibold",
-    "transition-[background-color,color,box-shadow] duration-150 ease-out",
+    "transition-[background-color,color,border-color,box-shadow] duration-150 ease-[cubic-bezier(0.165,0.84,0.44,1)]",
     "disabled:pointer-events-none disabled:opacity-50",
     focusRing,
   ),
@@ -24,7 +25,7 @@ const buttonVariants = cva(
         accent: "bg-accent text-accent-fg hover:bg-accent-hover shadow-sm",
         secondary:
           "bg-white text-stone-800 border border-stone-300 hover:bg-stone-50 hover:border-stone-400 shadow-sm",
-        destructive: "bg-red-700 text-white hover:bg-red-800 shadow-sm",
+        destructive: "bg-red-800 text-white hover:bg-red-900 shadow-sm",
         ghost: "text-stone-600 hover:bg-stone-100 hover:text-stone-900",
         link: "text-accent underline-offset-4 hover:underline",
       },
@@ -45,6 +46,14 @@ export function Button({
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants>) {
   return <button className={cn(buttonVariants({ variant, size }), className)} {...props} />;
+}
+
+type ButtonLinkProps = LinkProps &
+  Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, keyof LinkProps> &
+  VariantProps<typeof buttonVariants>;
+
+export function ButtonLink({ className, variant, size, ...props }: ButtonLinkProps) {
+  return <Link className={cn(buttonVariants({ variant, size }), className)} {...props} />;
 }
 
 const fieldBase = cn(
@@ -144,17 +153,23 @@ export function statusBadgeVariant(
   switch (status) {
     case "open":
     case "accepted":
+    case "placed":
+    case "offer":
     case "clean":
     case "sent":
     case "submitted":
       return "green";
     case "closing_soon":
     case "under_review":
+    case "shortlisted":
+    case "interview":
     case "pending":
     case "follow_up":
     case "started":
       return "amber";
     case "closed":
+    case "declined":
+    case "withdrawn":
     case "infected":
     case "bounced":
     case "failed":

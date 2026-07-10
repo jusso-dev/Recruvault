@@ -263,7 +263,7 @@ export default async function RespondPage({
                       name={name}
                       type="file"
                       accept={
-                        f.key === "resume"
+                        ["resume", "cover_letter"].includes(f.key)
                           ? ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                           : "application/pdf,image/*"
                       }

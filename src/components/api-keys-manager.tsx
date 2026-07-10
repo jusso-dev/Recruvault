@@ -2,8 +2,15 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { createApiKey, revokeApiKey } from "@/actions/api-keys";
+import {
+  createApiKey,
+  createCandidateApiKey,
+  revokeApiKey,
+  revokeCandidateApiKey,
+} from "@/actions/api-keys";
 import { Button, Input } from "@/components/ui";
+import { useToast } from "@/components/toast";
+import { userFacingError } from "@/lib/user-facing-errors";
 
 export interface ApiKeyRow {
   id: string;
@@ -13,26 +20,43 @@ export interface ApiKeyRow {
   createdAt: Date;
 }
 
-export function ApiKeysManager({ keys }: { keys: ApiKeyRow[] }) {
+export function ApiKeysManager({
+  keys,
+  scope = "organisation",
+}: {
+  keys: ApiKeyRow[];
+  scope?: "organisation" | "candidate";
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
+  const { showToast } = useToast();
 
   function onCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
-    setError(null);
     startTransition(async () => {
-      const res = await createApiKey(fd);
-      if (!res.ok || !res.key) {
-        setError(res.error ?? "Could not create the key.");
-        return;
+      try {
+        const res =
+          scope === "candidate" ? await createCandidateApiKey(fd) : await createApiKey(fd);
+        if (!res.ok || !res.key) {
+          showToast({
+            tone: "error",
+            message: userFacingError(res.error, "We couldn’t create the API key. Please try again."),
+          });
+          return;
+        }
+        setCreated(res.key);
+        form.reset();
+        showToast({
+          tone: "success",
+          message: "API key created. Copy it now because it won’t be shown again.",
+        });
+        router.refresh();
+      } catch (error) {
+        showToast({ tone: "error", message: userFacingError(error) });
       }
-      setCreated(res.key);
-      form.reset();
-      router.refresh();
     });
   }
 
@@ -40,8 +64,18 @@ export function ApiKeysManager({ keys }: { keys: ApiKeyRow[] }) {
     const fd = new FormData();
     fd.set("keyId", id);
     startTransition(async () => {
-      await revokeApiKey(fd);
-      router.refresh();
+      try {
+        const res =
+          scope === "candidate" ? await revokeCandidateApiKey(fd) : await revokeApiKey(fd);
+        if (!res.ok) {
+          showToast({ tone: "error", message: userFacingError(res.error) });
+          return;
+        }
+        showToast({ tone: "success", message: "API key revoked." });
+        router.refresh();
+      } catch (error) {
+        showToast({ tone: "error", message: userFacingError(error) });
+      }
     });
   }
 
@@ -96,14 +130,9 @@ export function ApiKeysManager({ keys }: { keys: ApiKeyRow[] }) {
           Create key
         </Button>
       </form>
-      {error && (
-        <p role="alert" className="text-sm text-red-600">
-          {error}
-        </p>
-      )}
       <p className="text-xs text-stone-500">
-        Keys authenticate the REST API and the MCP server. They carry your role;
-        treat them like a password.
+        Keys authenticate the REST API and MCP server. They are limited to your
+        {scope === "candidate" ? " job-seeker account" : " organisation role"}; treat them like a password.
       </p>
     </div>
   );

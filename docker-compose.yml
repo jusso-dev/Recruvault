@@ -12,6 +12,7 @@ services:
       DATABASE_URL: postgres://recruvault:recruvault@db:5432/recruvault
       APP_URL: ${APP_URL:-http://localhost:3000}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
+      ALLOW_RECRUITER_SIGNUP: ${ALLOW_RECRUITER_SIGNUP:-false}
       # Self-managed master key (openssl rand -hex 32). No external KMS.
       LOCAL_KEK: ${LOCAL_KEK:?set LOCAL_KEK}
       AWS_REGION: ${AWS_REGION:-ap-southeast-2}
@@ -20,7 +21,9 @@ services:
       S3_BUCKET: ${S3_BUCKET:-recruvault-documents}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_FORCE_PATH_STYLE: "true"
+      S3_SERVER_SIDE_ENCRYPTION: ${S3_SERVER_SIDE_ENCRYPTION:-false}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
       RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
       SHARED_SENDING_DOMAIN: ${SHARED_SENDING_DOMAIN:-mail.recruvault.example}
       CLAMAV_HOST: clamav

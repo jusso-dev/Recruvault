@@ -2,11 +2,12 @@ import Link from "next/link";
 import { eq, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { requestTemplates } from "@/db/schema";
-import { requireOrgUser } from "@/lib/guards";
+import { requireDashboardUser } from "@/lib/dashboard-auth";
 import { createRequest, deleteTemplate } from "@/actions/requests";
 import {
   DEFAULT_REQUEST_FIELD_KEYS,
   FIELD_LIBRARY,
+  ROLE_REQUEST_FIELD_KEYS,
   type RequestTemplateDefinition,
 } from "@/lib/fields";
 import { can } from "@/lib/rbac";
@@ -28,7 +29,7 @@ export default async function NewRequestPage({
 }: {
   searchParams: Promise<{ template?: string }>;
 }) {
-  const ctx = await requireOrgUser("requests:create");
+  const ctx = await requireDashboardUser("requests:create");
   const canManageTemplates = can(ctx.role, "templates:manage");
 
   const templates = await db
@@ -45,22 +46,23 @@ export default async function NewRequestPage({
   const selected = templates.find((t) => t.id === sp.template);
   const def = selected?.definition as RequestTemplateDefinition | undefined;
   const selectedKeys = new Set(def?.libraryKeys ?? []);
-  const customFieldsDefault = (def?.customLabels ?? []).join("\n");
-
-  const defaultFields = FIELD_LIBRARY.filter((f) => DEFAULT_REQUEST_FIELD_KEYS.includes(f.key));
-  const clearanceFields = FIELD_LIBRARY.filter(
-    (f) => f.key.startsWith("clearance") || f.key === "sponsoring_agency",
-  );
-  const identityFields = FIELD_LIBRARY.filter(
-    (f) => !clearanceFields.includes(f) && !defaultFields.includes(f),
-  );
-  // Standard attachments default ON for a fresh request; a template's saved
-  // selection wins when one is applied.
-  const defaultChecked = (key: string) => (def ? selectedKeys.has(key) : true);
+  const roleFields = ROLE_REQUEST_FIELD_KEYS.map((key) =>
+    FIELD_LIBRARY.find((field) => field.key === key),
+  ).filter((field): field is NonNullable<typeof field> => Boolean(field));
+  const defaultChecked = (key: string) =>
+    def ? selectedKeys.has(key) : DEFAULT_REQUEST_FIELD_KEYS.includes(key);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <h1 className="text-2xl font-bold">New secure request</h1>
+      <div>
+        <p className="text-sm font-medium text-accent">Add to hiring pipeline</p>
+        <h1 className="mt-1 text-[1.9rem] font-semibold tracking-[-0.035em] text-stone-950">
+          New role
+        </h1>
+        <p className="mt-2 text-sm text-stone-500">
+          Define the role, application requirements, and secure candidate intake.
+        </p>
+      </div>
 
       {templates.length > 0 && (
         <Card>
@@ -132,13 +134,104 @@ export default async function NewRequestPage({
                 id="title"
                 name="title"
                 required
-                placeholder="Senior Systems Engineer — NV1"
+                placeholder="Senior Systems Engineer, NV1"
                 defaultValue={def?.title ?? ""}
               />
             </div>
             <div>
               <Label htmlFor="description">Description (shown to the candidate)</Label>
               <Textarea id="description" name="description" defaultValue={def?.description ?? ""} />
+            </div>
+            <div>
+              <Label htmlFor="skills">Skills and keywords</Label>
+              <Input
+                id="skills"
+                name="skills"
+                placeholder="Azure, incident response, Microsoft Sentinel"
+                defaultValue={def?.skills?.join(", ") ?? ""}
+              />
+              <p className="mt-1 text-xs leading-5 text-stone-500">
+                Comma-separated role metadata used for search and opt-in job-match alerts. This is
+                not information requested from the candidate.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="location">Location</Label>
+                <Input
+                  id="location"
+                  name="location"
+                  placeholder="Canberra, ACT"
+                  defaultValue={def?.location ?? ""}
+                />
+              </div>
+              <div>
+                <Label htmlFor="employmentType">Employment type</Label>
+                <Select
+                  id="employmentType"
+                  name="employmentType"
+                  defaultValue={def?.employmentType ?? ""}
+                >
+                  <option value="">Not specified</option>
+                  <option value="permanent">Permanent</option>
+                  <option value="contract">Contract</option>
+                  <option value="fixed_term">Fixed term</option>
+                  <option value="casual">Casual</option>
+                </Select>
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="workArrangement">Work arrangement</Label>
+                <Select
+                  id="workArrangement"
+                  name="workArrangement"
+                  defaultValue={def?.workArrangement ?? ""}
+                >
+                  <option value="">Not specified</option>
+                  <option value="on_site">On-site</option>
+                  <option value="hybrid">Hybrid</option>
+                  <option value="remote">Remote</option>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="salaryPeriod">Salary or rate period</Label>
+                <Select
+                  id="salaryPeriod"
+                  name="salaryPeriod"
+                  defaultValue={def?.salaryPeriod ?? "annual"}
+                >
+                  <option value="annual">Annual salary</option>
+                  <option value="daily">Daily rate</option>
+                  <option value="hourly">Hourly rate</option>
+                </Select>
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="salaryMin">Minimum salary or rate</Label>
+                <Input
+                  id="salaryMin"
+                  name="salaryMin"
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="120000"
+                  defaultValue={def?.salaryMin ?? ""}
+                />
+              </div>
+              <div>
+                <Label htmlFor="salaryMax">Maximum salary or rate</Label>
+                <Input
+                  id="salaryMax"
+                  name="salaryMax"
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="150000"
+                  defaultValue={def?.salaryMax ?? ""}
+                />
+              </div>
             </div>
             <div>
               <Label htmlFor="jd">Job description (PDF or Word, stored encrypted)</Label>
@@ -166,90 +259,41 @@ export default async function NewRequestPage({
 
         <Card>
           <CardHeader>
-            <CardTitle>Requested information</CardTitle>
+            <CardTitle>Application requirements</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <fieldset>
               <legend className="mb-2 text-sm font-semibold text-stone-700">
-                Standard attachments
+                Candidate requirements
               </legend>
-              <div className="space-y-2">
-                {defaultFields.map((f) => (
-                  <label key={f.key} className="flex items-start gap-2 text-sm">
+              <p className="mb-3 text-xs text-stone-500">
+                Choose only what is needed for this role.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {roleFields.map((field) => (
+                  <label
+                    key={field.key}
+                    className="flex items-start gap-3 rounded-md border border-stone-200 bg-stone-50/60 p-3 text-sm"
+                  >
                     <input
                       type="checkbox"
                       name="fields"
-                      value={f.key}
+                      value={field.key}
                       className="mt-0.5"
-                      defaultChecked={defaultChecked(f.key)}
+                      defaultChecked={defaultChecked(field.key)}
                     />
                     <span>
-                      {f.label}
-                      {f.helpText && (
-                        <span className="block text-xs text-stone-500">{f.helpText}</span>
+                      <span className="font-medium text-stone-800">{field.label}</span>
+                      {field.helpText && (
+                        <span className="mt-0.5 block text-xs leading-5 text-stone-500">
+                          {field.helpText}
+                        </span>
                       )}
                     </span>
                   </label>
                 ))}
               </div>
             </fieldset>
-            <fieldset>
-              <legend className="mb-2 text-sm font-semibold text-stone-700">
-                Clearance
-              </legend>
-              <div className="space-y-2">
-                {clearanceFields.map((f) => (
-                  <label key={f.key} className="flex items-start gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      name="fields"
-                      value={f.key}
-                      className="mt-0.5"
-                      defaultChecked={selectedKeys.has(f.key)}
-                    />
-                    <span>
-                      {f.label}
-                      {f.helpText && (
-                        <span className="block text-xs text-stone-500">{f.helpText}</span>
-                      )}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-            <fieldset>
-              <legend className="mb-2 text-sm font-semibold text-stone-700">
-                Identity and eligibility
-              </legend>
-              <div className="space-y-2">
-                {identityFields.map((f) => (
-                  <label key={f.key} className="flex items-start gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      name="fields"
-                      value={f.key}
-                      className="mt-0.5"
-                      defaultChecked={selectedKeys.has(f.key)}
-                    />
-                    <span>
-                      {f.label}
-                      {f.helpText && (
-                        <span className="block text-xs text-stone-500">{f.helpText}</span>
-                      )}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-            <div>
-              <Label htmlFor="customFields">Custom fields (one label per line, optional)</Label>
-              <Textarea
-                id="customFields"
-                name="customFields"
-                placeholder={"Notice period\nPreferred location"}
-                defaultValue={customFieldsDefault}
-              />
-            </div>
           </CardContent>
         </Card>
 
@@ -275,7 +319,7 @@ export default async function NewRequestPage({
             </div>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" name="listed" />
-              List this role (discoverable to seekers you engage with — never a public board)
+              List this role (discoverable to seekers you engage with, never a public board)
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" name="saveAsTemplate" />
@@ -285,7 +329,7 @@ export default async function NewRequestPage({
         </Card>
 
         <Button type="submit" size="lg">
-          Create request
+          Create role
         </Button>
       </ActionForm>
     </div>

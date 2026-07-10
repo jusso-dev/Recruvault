@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { Button } from "@/components/ui";
+import { Button, ButtonLink } from "@/components/ui";
 
 /**
  * Root error boundary. Server-thrown error messages are stripped by Next in
@@ -9,10 +8,7 @@ import { Button } from "@/components/ui";
  * couple of recovery paths — never internal detail. The message is surfaced in
  * development only, to aid debugging.
  */
-export default function RootError({
-  error,
-  reset,
-}: {
+export default function RootError({ reset }: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
@@ -22,17 +18,9 @@ export default function RootError({
       <p className="text-sm text-stone-600">
         An unexpected error occurred. You can try again, or head back and sign in.
       </p>
-      {process.env.NODE_ENV === "development" && (
-        <pre className="max-w-full overflow-x-auto rounded bg-stone-100 p-3 text-left text-xs text-stone-700">
-          {error.message}
-          {error.digest ? `\n\ndigest: ${error.digest}` : ""}
-        </pre>
-      )}
       <div className="flex gap-2">
         <Button onClick={reset}>Try again</Button>
-        <Link href="/sign-in">
-          <Button variant="secondary">Sign in</Button>
-        </Link>
+        <ButtonLink href="/sign-in" variant="secondary">Sign in</ButtonLink>
       </div>
     </main>
   );

@@ -1,5 +1,6 @@
 import "server-only";
 import { betterAuth } from "better-auth";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { magicLink } from "better-auth/plugins";
 import { passkey } from "@better-auth/passkey";
@@ -14,6 +15,7 @@ import {
   rateLimit,
 } from "@/db/schema";
 import { sendAuthEmail } from "@/lib/email";
+import { recruiterSignupEnabled } from "@/lib/signup-policy";
 
 /**
  * BetterAuth serves both account worlds: organisation-side users (recruiters,
@@ -42,18 +44,33 @@ export const auth = betterAuth({
       "/sign-in/email": { window: 60, max: 5 },
       "/sign-up/email": { window: 60, max: 5 },
       "/magic-link/send": { window: 60, max: 3 },
+      "/send-verification-email": { window: 60, max: 3 },
+      "/request-password-reset": { window: 60, max: 3 },
+      "/reset-password": { window: 60, max: 5 },
     },
   },
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: false,
+    revokeSessionsOnPasswordReset: true,
+    sendResetPassword: async ({ user: u, url }) => {
+      await sendAuthEmail({
+        to: u.email,
+        subject: "Reset your Recruvault password",
+        heading: "Reset your password",
+        body: "Use this secure link to choose a new password. It expires in one hour. If you did not request this, you can ignore this email.",
+        ctaLabel: "Reset password",
+        ctaUrl: url,
+      });
+    },
   },
   emailVerification: {
     sendOnSignUp: true,
+    autoSignInAfterVerification: true,
     sendVerificationEmail: async ({ user: u, url }) => {
       await sendAuthEmail({
         to: u.email,
-        subject: "Verify your email — Recruvault",
+        subject: "Verify your email: Recruvault",
         heading: "Verify your email",
         body: "Confirm your email address to activate your Recruvault account.",
         ctaLabel: "Verify email",
@@ -69,6 +86,20 @@ export const auth = betterAuth({
         input: true,
       },
     },
+  },
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (
+        ctx.path === "/sign-up/email" &&
+        ctx.body?.accountType === "org" &&
+        !recruiterSignupEnabled()
+      ) {
+        throw APIError.from("FORBIDDEN", {
+          code: "RECRUITER_SIGNUP_DISABLED",
+          message: "Recruiter self-registration is closed.",
+        });
+      }
+    }),
   },
   plugins: [
     magicLink({

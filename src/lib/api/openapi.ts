@@ -11,9 +11,13 @@ export function buildOpenApiSpec() {
       title: "Recruvault API",
       version: "1.0.0",
       description:
-        "Programmatic access for recruiters: create secure requests, upload job descriptions, match opted-in candidates, and send secure links. Authenticate with an API key (Settings → API keys) as a Bearer token.",
+        "Programmatic access for recruiters and job seekers. Organisation keys manage roles and candidate workflows; job-seeker keys access only the owner's applications, career-document metadata, and discovery profile. Authenticate with a Recruvault API key as a Bearer token.",
     },
     servers: [{ url: `${appUrl}/api/v1` }],
+    tags: [
+      { name: "Recruiter", description: "Organisation-scoped role and placement operations." },
+      { name: "Job seeker", description: "Owner-scoped application and career-record operations." },
+    ],
     security: [{ apiKey: [] }],
     components: {
       securitySchemes: {
@@ -25,22 +29,49 @@ export function buildOpenApiSpec() {
           type: "object",
           required: ["title"],
           properties: {
-            title: { type: "string", example: "Senior Systems Engineer — NV1" },
+            title: { type: "string", example: "Senior Systems Engineer, NV1" },
             description: { type: "string", nullable: true },
+            location: { type: "string", nullable: true, example: "Canberra, ACT" },
+            employmentType: {
+              type: "string",
+              nullable: true,
+              enum: ["permanent", "contract", "fixed_term", "casual", null],
+            },
+            workArrangement: {
+              type: "string",
+              nullable: true,
+              enum: ["on_site", "hybrid", "remote", null],
+            },
+            salaryMin: { type: "integer", minimum: 0, nullable: true },
+            salaryMax: { type: "integer", minimum: 0, nullable: true },
+            salaryPeriod: {
+              type: "string",
+              nullable: true,
+              enum: ["annual", "daily", "hourly", null],
+            },
+            skills: {
+              type: "array",
+              maxItems: 30,
+              items: { type: "string", maxLength: 80 },
+              description:
+                "Role search metadata used for opt-in matching alerts; it is not a candidate response field.",
+            },
             consentPurpose: { type: "string", nullable: true },
             listed: { type: "boolean", default: false },
             jdViewMode: { type: "string", enum: ["view_only", "allow_download"] },
             expiresAt: { type: "string", format: "date-time", nullable: true },
             fieldKeys: {
               type: "array",
-              items: { type: "string" },
-              description: "Field-library keys to request, e.g. clearance_level, citizenship.",
+              items: {
+                type: "string",
+                enum: ["clearance_level", "clearance_id", "resume", "cover_letter"],
+              },
+              description: "Candidate requirements for the role.",
             },
-            customLabels: { type: "array", items: { type: "string" } },
             includeDefaults: {
               type: "boolean",
               default: true,
-              description: "Append resume + suitability_statement if not present.",
+              description: "Append resume + cover_letter if not present.",
             },
           },
         },
@@ -48,11 +79,23 @@ export function buildOpenApiSpec() {
           type: "object",
           properties: {
             clearanceLevel: { type: "string", enum: ["baseline", "nv1", "nv2", "pv", "tspa"] },
-            citizenship: { type: "string" },
-            rightToWork: { type: "string" },
             skills: { type: "array", items: { type: "string" } },
             limit: { type: "integer", default: 20, maximum: 50 },
           },
+        },
+        CandidateProfileUpdate: {
+          type: "object",
+          properties: {
+            discoverable: { type: "boolean" },
+            clearanceLevel: {
+              type: ["string", "null"],
+              enum: ["baseline", "nv1", "nv2", "pv", "tspa", null],
+            },
+            skills: { type: "array", items: { type: "string" }, maxItems: 30 },
+            location: { type: ["string", "null"], maxLength: 120 },
+          },
+          description:
+            "Identity documents, citizenship, right-to-work information, and police checks are not accepted.",
         },
         CandidateMatch: {
           type: "object",
@@ -77,10 +120,12 @@ export function buildOpenApiSpec() {
     paths: {
       "/requests": {
         get: {
+          tags: ["Recruiter"],
           summary: "List requests",
           responses: { "200": { description: "OK" }, "401": errRef() },
         },
         post: {
+          tags: ["Recruiter"],
           summary: "Create a request",
           requestBody: {
             required: true,
@@ -95,6 +140,7 @@ export function buildOpenApiSpec() {
       },
       "/requests/{id}": {
         get: {
+          tags: ["Recruiter"],
           summary: "Get a request with its fields",
           parameters: [idParam()],
           responses: { "200": { description: "OK" }, "404": errRef() },
@@ -102,6 +148,7 @@ export function buildOpenApiSpec() {
       },
       "/requests/{id}/jd": {
         post: {
+          tags: ["Recruiter"],
           summary: "Upload the job description (PDF or Word .docx)",
           parameters: [idParam()],
           requestBody: {
@@ -121,6 +168,7 @@ export function buildOpenApiSpec() {
       },
       "/requests/{id}/submissions": {
         get: {
+          tags: ["Recruiter"],
           summary: "List submission metadata for a request",
           parameters: [idParam()],
           responses: { "200": { description: "OK" }, "403": errRef(), "404": errRef() },
@@ -128,6 +176,7 @@ export function buildOpenApiSpec() {
       },
       "/requests/{id}/send": {
         post: {
+          tags: ["Recruiter"],
           summary: "Send the secure link to an email or a candidate handle",
           parameters: [idParam()],
           requestBody: {
@@ -137,8 +186,22 @@ export function buildOpenApiSpec() {
           responses: { "200": { description: "Queued" }, "400": errRef(), "404": errRef() },
         },
       },
+      "/reports/recruiter": {
+        get: {
+          tags: ["Recruiter"],
+          summary: "Get recruiter operations report",
+          description:
+            "Returns active and unfilled roles, previous-calendar-month application activity, unanswered invitations, stage aging, application velocity, matched-alert performance, role-level pipeline stages, deadlines, and a prioritised action queue.",
+          responses: {
+            "200": { description: "Detailed recruiter caseload and priority report" },
+            "401": errRef(),
+            "403": errRef(),
+          },
+        },
+      },
       "/match": {
         post: {
+          tags: ["Recruiter"],
           summary: "Find opted-in candidates matching role requirements",
           requestBody: {
             required: true,
@@ -153,6 +216,38 @@ export function buildOpenApiSpec() {
             },
             "401": errRef(),
           },
+        },
+      },
+      "/me/applications": {
+        get: {
+          tags: ["Job seeker"],
+          summary: "List my applications",
+          description: "Returns only applications owned by the authenticated job seeker.",
+          responses: { "200": { description: "OK" }, "401": errRef() },
+        },
+      },
+      "/me/documents": {
+        get: {
+          tags: ["Job seeker"],
+          summary: "List my career documents",
+          description: "Returns scan state and metadata for resumes and cover letters. It never returns file bytes.",
+          responses: { "200": { description: "OK" }, "401": errRef() },
+        },
+      },
+      "/me/profile": {
+        get: {
+          tags: ["Job seeker"],
+          summary: "Get my discovery profile",
+          responses: { "200": { description: "OK" }, "401": errRef() },
+        },
+        patch: {
+          tags: ["Job seeker"],
+          summary: "Update my discovery profile",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: ref("CandidateProfileUpdate") } },
+          },
+          responses: { "200": { description: "Updated" }, "400": errRef(), "401": errRef() },
         },
       },
     },

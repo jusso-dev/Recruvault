@@ -1,6 +1,5 @@
-import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
-import { Button, Card, CardContent } from "@/components/ui";
+import { ButtonLink, Card, CardContent } from "@/components/ui";
 
 export default function DonePage() {
   return (
@@ -17,9 +16,9 @@ export default function DonePage() {
           <p className="text-sm text-stone-600">
             Want to reuse these details next time in one tap?
           </p>
-          <Link href="/sign-up?type=seeker">
-            <Button variant="secondary">Create a free wallet</Button>
-          </Link>
+          <ButtonLink href="/sign-up?type=seeker" variant="secondary">
+            Create a free wallet
+          </ButtonLink>
         </CardContent>
       </Card>
     </main>

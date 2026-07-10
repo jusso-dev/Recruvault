@@ -19,9 +19,10 @@ import { sendEvent } from "@/inngest/client";
 import { newStorageKey, putObjectBytes, deleteObject } from "@/lib/storage";
 import { sniffContentType } from "@/lib/scan";
 import {
-  UPLOAD_ALLOWED_TYPES,
   UPLOAD_MAX_BYTES,
+  WALLET_DOCUMENT_TYPES,
   WALLET_ITEM_TYPES,
+  allowedTypesForWalletDocument,
 } from "@/lib/fields";
 import { sendErasureConfirmation } from "@/lib/email";
 import { eraseCandidate } from "@/lib/retention";
@@ -77,6 +78,7 @@ export async function upsertWalletItem(formData: FormData): Promise<ActionResult
   });
 
   revalidatePath("/wallet");
+  revalidatePath("/overview");
   return { ok: true };
 }
 
@@ -107,14 +109,19 @@ export async function deleteWalletItem(formData: FormData): Promise<ActionResult
   });
 
   revalidatePath("/wallet");
+  revalidatePath("/overview");
   return { ok: true };
 }
 
-/** Upload a reusable wallet document (passport, licence, other evidence). */
+/** Upload a reusable career document. Identity and background-check documents are not accepted. */
 export async function uploadWalletDocument(formData: FormData): Promise<ActionResult> {
   const ctx = await requireCandidate();
   const kind = String(formData.get("kind") ?? "other");
   const file = formData.get("file");
+
+  if (!WALLET_DOCUMENT_TYPES.some((type) => type.type === kind)) {
+    return { ok: false, error: "Unknown document type." };
+  }
 
   if (!(file instanceof File) || file.size === 0) {
     return { ok: false, error: "Choose a file to upload." };
@@ -123,8 +130,13 @@ export async function uploadWalletDocument(formData: FormData): Promise<ActionRe
 
   const bytes = Buffer.from(await file.arrayBuffer());
   const sniffed = sniffContentType(bytes);
-  if (!sniffed || !UPLOAD_ALLOWED_TYPES.includes(sniffed)) {
-    return { ok: false, error: "Only PDF and image files are accepted." };
+  if (!sniffed || !allowedTypesForWalletDocument(kind).includes(sniffed)) {
+    return {
+      ok: false,
+      error: ["resume", "cover_letter", "selection_criteria"].includes(kind)
+        ? "Use a PDF or Word document for this career document."
+        : "Use a PDF or image for this document type.",
+    };
   }
 
   const storageKey = newStorageKey("wallet", ctx.candidateAccountId, file.name);
@@ -155,6 +167,8 @@ export async function uploadWalletDocument(formData: FormData): Promise<ActionRe
   });
 
   revalidatePath("/wallet");
+  revalidatePath("/documents");
+  revalidatePath("/overview");
   return { ok: true };
 }
 
@@ -191,6 +205,8 @@ export async function deleteWalletDocument(formData: FormData): Promise<ActionRe
   });
 
   revalidatePath("/wallet");
+  revalidatePath("/documents");
+  revalidatePath("/overview");
   return { ok: true };
 }
 
@@ -227,6 +243,7 @@ export async function revokeWalletShare(formData: FormData): Promise<ActionResul
   });
 
   revalidatePath("/wallet");
+  revalidatePath("/overview");
   return { ok: true };
 }
 
@@ -263,6 +280,7 @@ export async function toggleSavedRole(formData: FormData): Promise<ActionResult>
   }
 
   revalidatePath("/roles");
+  revalidatePath("/overview");
   return { ok: true };
 }
 
@@ -277,6 +295,7 @@ export async function requestErasure(formData: FormData): Promise<ActionResult> 
   await sendErasureConfirmation({ to: ctx.userEmail });
 
   revalidatePath("/wallet");
+  revalidatePath("/overview");
   return { ok: true };
 }
 
@@ -290,8 +309,6 @@ export async function upsertDiscoveryProfile(formData: FormData): Promise<Action
 
   const discoverable = formData.get("discoverable") === "on";
   const clearanceLevel = String(formData.get("clearanceLevel") ?? "").trim() || null;
-  const citizenship = String(formData.get("citizenship") ?? "").trim() || null;
-  const rightToWork = String(formData.get("rightToWork") ?? "").trim() || null;
   const location = String(formData.get("location") ?? "").trim() || null;
   const skills = String(formData.get("skills") ?? "")
     .split(",")
@@ -312,15 +329,25 @@ export async function upsertDiscoveryProfile(formData: FormData): Promise<Action
       handle,
       discoverable,
       clearanceLevel,
-      citizenship,
-      rightToWork,
+      // These fields are retained in the schema for compatibility, but are
+      // deliberately cleared. Recruvault does not collect this sensitive PII.
+      citizenship: null,
+      rightToWork: null,
       skills,
       location,
       updatedAt: new Date(),
     })
     .onConflictDoUpdate({
       target: discoveryProfiles.candidateAccountId,
-      set: { discoverable, clearanceLevel, citizenship, rightToWork, skills, location, updatedAt: new Date() },
+      set: {
+        discoverable,
+        clearanceLevel,
+        citizenship: null,
+        rightToWork: null,
+        skills,
+        location,
+        updatedAt: new Date(),
+      },
     });
 
   const meta = await requestMeta();
@@ -334,5 +361,6 @@ export async function upsertDiscoveryProfile(formData: FormData): Promise<Action
   });
 
   revalidatePath("/wallet");
+  revalidatePath("/overview");
   return { ok: true };
 }

@@ -4,8 +4,6 @@ import { rankProfiles, type ScorableProfile } from "@/lib/match";
 const p = (over: Partial<ScorableProfile>): ScorableProfile => ({
   handle: "cand_x",
   clearanceLevel: null,
-  citizenship: null,
-  rightToWork: null,
   skills: [],
   location: null,
   ...over,
@@ -25,10 +23,10 @@ describe("rankProfiles", () => {
 
   it("scores full match higher than partial", () => {
     const profiles = [
-      p({ handle: "full", clearanceLevel: "nv2", citizenship: "au_citizen" }),
-      p({ handle: "partial", clearanceLevel: "nv2", citizenship: "other" }),
+      p({ handle: "full", clearanceLevel: "nv2", skills: ["AWS", "ISM"] }),
+      p({ handle: "partial", clearanceLevel: "nv2", skills: ["COBOL"] }),
     ];
-    const res = rankProfiles(profiles, { clearanceLevel: "nv1", citizenship: "au_citizen" });
+    const res = rankProfiles(profiles, { clearanceLevel: "nv1", skills: ["AWS", "ISM"] });
     expect(res[0].handle).toBe("full");
     expect(res[0].score).toBe(1);
     expect(res.find((r) => r.handle === "partial")?.score).toBeLessThan(1);
@@ -42,8 +40,8 @@ describe("rankProfiles", () => {
   });
 
   it("excludes profiles that meet no criteria", () => {
-    const profiles = [p({ handle: "none", citizenship: "other" })];
-    expect(rankProfiles(profiles, { citizenship: "au_citizen" })).toHaveLength(0);
+    const profiles = [p({ handle: "none", skills: ["COBOL"] })];
+    expect(rankProfiles(profiles, { skills: ["Rust"] })).toHaveLength(0);
   });
 
   it("returns nothing when no requirements are given", () => {

@@ -2,9 +2,22 @@ import "server-only";
 import { and, eq, isNull } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { db } from "@/db";
-import { apiKeys, memberships, organisations, user } from "@/db/schema";
+import {
+  apiKeys,
+  candidateAccounts,
+  candidateApiKeys,
+  memberships,
+  organisations,
+  user,
+} from "@/db/schema";
 import { sha256 } from "@/lib/crypto";
-import { requireOrgUser, AuthError, type OrgContext } from "@/lib/guards";
+import {
+  requireCandidate,
+  requireOrgUser,
+  AuthError,
+  type CandidateContext,
+  type OrgContext,
+} from "@/lib/guards";
 import { can, type Permission } from "@/lib/rbac";
 
 export const API_KEY_PREFIX = "rv_";
@@ -74,4 +87,46 @@ async function contextFromApiKey(token: string): Promise<OrgContext> {
     orgName: row.orgName,
     role: row.role,
   };
+}
+
+/** Resolve a job seeker's own API context from an API key or browser session. */
+export async function resolveCandidateContext(req: NextRequest): Promise<CandidateContext> {
+  const auth = req.headers.get("authorization");
+  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+
+  if (bearer?.startsWith(API_KEY_PREFIX)) {
+    const keyHash = sha256(bearer);
+    const [row] = await db
+      .select({
+        keyId: candidateApiKeys.id,
+        candidateAccountId: candidateApiKeys.candidateAccountId,
+        userId: candidateAccounts.userId,
+        userEmail: user.email,
+        userName: user.name,
+      })
+      .from(candidateApiKeys)
+      .innerJoin(
+        candidateAccounts,
+        eq(candidateAccounts.id, candidateApiKeys.candidateAccountId),
+      )
+      .innerJoin(user, eq(user.id, candidateAccounts.userId))
+      .where(and(eq(candidateApiKeys.keyHash, keyHash), isNull(candidateApiKeys.revokedAt)));
+
+    if (!row) throw new AuthError("Invalid or revoked job-seeker API key.");
+
+    void db
+      .update(candidateApiKeys)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(candidateApiKeys.id, row.keyId))
+      .catch(() => {});
+
+    return {
+      userId: row.userId,
+      userEmail: row.userEmail,
+      userName: row.userName,
+      candidateAccountId: row.candidateAccountId,
+    };
+  }
+
+  return requireCandidate();
 }

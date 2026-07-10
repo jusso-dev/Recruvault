@@ -33,22 +33,43 @@ export interface OrgContext {
   role: OrgRole;
 }
 
+export type OrgAccessResult =
+  | { ok: true; context: OrgContext }
+  | {
+      ok: false;
+      reason:
+        | "sign_in"
+        | "wrong_account"
+        | "verification_required"
+        | "no_membership"
+        | "ambiguous_membership"
+        | "permission_denied";
+      message: string;
+    };
+
 /**
- * Resolve the signed-in organisation user and their active membership.
- * Throws AuthError when there is no session, the account is a job seeker,
- * or the required permission is not granted by the member's role.
+ * Resolve the signed-in organisation user and their active membership as an
+ * explicit result so Server Components can render or redirect expected states.
  */
-export async function requireOrgUser(permission?: Permission): Promise<OrgContext> {
+export async function resolveOrgUser(permission?: Permission): Promise<OrgAccessResult> {
   const session = await getSession();
-  if (!session) throw new AuthError("Sign in required.");
+  if (!session) return { ok: false, reason: "sign_in", message: "Sign in required." };
   if ((session.user as { accountType?: string }).accountType !== "org") {
-    throw new AuthError("Organisation account required.");
+    return {
+      ok: false,
+      reason: "wrong_account",
+      message: "Organisation account required.",
+    };
   }
   // Org accounts must verify their email before acting: createOrganisation and
   // addMember trust the address for membership matching, so an unverified one
   // must not be able to create orgs or send requests.
   if (!(session.user as { emailVerified?: boolean }).emailVerified) {
-    throw new AuthError("Verify your email address before continuing.");
+    return {
+      ok: false,
+      reason: "verification_required",
+      message: "Verify your email address before continuing.",
+    };
   }
 
   const rows = await db
@@ -62,27 +83,50 @@ export async function requireOrgUser(permission?: Permission): Promise<OrgContex
     .innerJoin(organisations, eq(organisations.id, memberships.orgId))
     .where(eq(memberships.userId, session.user.id));
 
-  if (rows.length === 0) throw new AuthError("No organisation membership.");
+  if (rows.length === 0) {
+    return {
+      ok: false,
+      reason: "no_membership",
+      message: "No organisation membership.",
+    };
+  }
   // Single-org invariant (enforced at membership creation). More than one
   // membership is ambiguous with no active-org selector, so fail closed rather
   // than silently resolve to an arbitrary tenant's data.
   if (rows.length > 1) {
-    throw new AuthError("Account belongs to multiple organisations; contact support.");
+    return {
+      ok: false,
+      reason: "ambiguous_membership",
+      message: "Account belongs to multiple organisations; contact support.",
+    };
   }
   const m = rows[0];
   if (permission && !can(m.role, permission)) {
-    throw new AuthError(`Your role does not allow this action (${permission}).`);
+    return {
+      ok: false,
+      reason: "permission_denied",
+      message: `Your role does not allow this action (${permission}).`,
+    };
   }
 
   return {
-    userId: session.user.id,
-    userEmail: session.user.email,
-    userName: session.user.name,
-    orgId: m.orgId,
-    orgSlug: m.orgSlug,
-    orgName: m.orgName,
-    role: m.role,
+    ok: true,
+    context: {
+      userId: session.user.id,
+      userEmail: session.user.email,
+      userName: session.user.name,
+      orgId: m.orgId,
+      orgSlug: m.orgSlug,
+      orgName: m.orgName,
+      role: m.role,
+    },
   };
+}
+
+export async function requireOrgUser(permission?: Permission): Promise<OrgContext> {
+  const access = await resolveOrgUser(permission);
+  if (!access.ok) throw new AuthError(access.message);
+  return access.context;
 }
 
 export interface CandidateContext {

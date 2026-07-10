@@ -20,8 +20,18 @@ import { requireOrgUser, requestMeta } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { sendEvent } from "@/inngest/client";
 import { newStorageKey, putObjectBytes } from "@/lib/storage";
-import { fieldDefinition, JD_ALLOWED_TYPES, UPLOAD_MAX_BYTES } from "@/lib/fields";
+import {
+  fieldDefinition,
+  JD_ALLOWED_TYPES,
+  ROLE_REQUEST_FIELD_KEYS,
+  UPLOAD_MAX_BYTES,
+} from "@/lib/fields";
 import { sniffContentType } from "@/lib/scan";
+import {
+  EMPLOYMENT_TYPES,
+  SALARY_PERIODS,
+  WORK_ARRANGEMENTS,
+} from "@/lib/role-metadata";
 import type { ActionResult } from "./org";
 
 /**
@@ -36,6 +46,41 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
   const title = String(formData.get("title") ?? "").trim();
   if (!title) return { ok: false, error: "Title is required." };
   const description = String(formData.get("description") ?? "").trim() || null;
+  const location = String(formData.get("location") ?? "").trim().slice(0, 120) || null;
+  const employmentType = String(formData.get("employmentType") ?? "").trim() || null;
+  const workArrangement = String(formData.get("workArrangement") ?? "").trim() || null;
+  const salaryPeriod = String(formData.get("salaryPeriod") ?? "").trim() || null;
+  const salaryMinRaw = String(formData.get("salaryMin") ?? "").trim();
+  const salaryMaxRaw = String(formData.get("salaryMax") ?? "").trim();
+  const salaryMin = salaryMinRaw ? Number(salaryMinRaw) : null;
+  const salaryMax = salaryMaxRaw ? Number(salaryMaxRaw) : null;
+  const skills = [...new Set(
+    String(formData.get("skills") ?? "")
+      .split(",")
+      .map((skill) => skill.trim())
+      .filter(Boolean),
+  )].slice(0, 30);
+  if (skills.some((skill) => skill.length > 80)) {
+    return { ok: false, error: "Keep each skill or keyword under 80 characters." };
+  }
+  if (employmentType && !EMPLOYMENT_TYPES.includes(employmentType as never)) {
+    return { ok: false, error: "Choose a supported employment type." };
+  }
+  if (workArrangement && !WORK_ARRANGEMENTS.includes(workArrangement as never)) {
+    return { ok: false, error: "Choose a supported work arrangement." };
+  }
+  if (salaryPeriod && !SALARY_PERIODS.includes(salaryPeriod as never)) {
+    return { ok: false, error: "Choose a supported salary or rate period." };
+  }
+  if (
+    (salaryMin !== null && (!Number.isInteger(salaryMin) || salaryMin < 0)) ||
+    (salaryMax !== null && (!Number.isInteger(salaryMax) || salaryMax < 0))
+  ) {
+    return { ok: false, error: "Salary or rate values must be whole positive numbers." };
+  }
+  if (salaryMin !== null && salaryMax !== null && salaryMin > salaryMax) {
+    return { ok: false, error: "The minimum salary or rate cannot exceed the maximum." };
+  }
   const consentPurpose = String(formData.get("consentPurpose") ?? "").trim() || null;
   const listed = formData.get("listed") === "on";
   const jdViewMode =
@@ -46,12 +91,16 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
     return { ok: false, error: "Invalid expiry date." };
   }
 
-  const libraryKeys = formData.getAll("fields").map(String);
-  const customLabels = String(formData.get("customFields") ?? "")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (libraryKeys.length === 0 && customLabels.length === 0) {
+  const submittedKeys = formData.getAll("fields").map(String);
+  const invalidKey = submittedKeys.find(
+    (key) => !ROLE_REQUEST_FIELD_KEYS.includes(key as (typeof ROLE_REQUEST_FIELD_KEYS)[number]),
+  );
+  if (invalidKey) {
+    return { ok: false, error: "That candidate requirement is not available for roles." };
+  }
+  const libraryKeys = [...new Set(submittedKeys)];
+  const customLabels: string[] = [];
+  if (libraryKeys.length === 0) {
     return { ok: false, error: "Select at least one field to request." };
   }
 
@@ -90,6 +139,13 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
       createdBy: ctx.userId,
       title,
       description,
+      location,
+      employmentType,
+      workArrangement,
+      salaryMin,
+      salaryMax,
+      salaryPeriod,
+      skills,
       status: "open",
       listed,
       expiresAt,
@@ -115,24 +171,25 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
       sortOrder: sortOrder++,
     });
   }
-  for (const label of customLabels) {
-    await db.insert(requestFields).values({
-      requestId: request.id,
-      key: "custom",
-      type: "short_text",
-      label,
-      required: false,
-      sensitive: false,
-      sortOrder: sortOrder++,
-    });
-  }
-
   if (formData.get("saveAsTemplate") === "on") {
     await db.insert(requestTemplates).values({
       orgId: ctx.orgId,
       name: title,
       createdBy: ctx.userId,
-      definition: { title, description, libraryKeys, customLabels, jdViewMode },
+      definition: {
+        title,
+        description,
+        location,
+        employmentType,
+        workArrangement,
+        salaryMin,
+        salaryMax,
+        salaryPeriod,
+        skills,
+        libraryKeys,
+        customLabels,
+        jdViewMode,
+      },
     });
   }
 
@@ -145,6 +202,10 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
     targetId: request.id,
     ...meta,
   });
+
+  if (listed && skills.length > 0) {
+    await sendEvent("job-alert/role-listed", { requestId: request.id });
+  }
 
   revalidatePath("/dashboard");
   return { ok: true, id: request.id };

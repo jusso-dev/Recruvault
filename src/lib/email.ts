@@ -43,7 +43,10 @@ export function fromAddress(org?: OrgSender): string {
     return `${org.senderName ?? org.orgName} <no-reply@${org.sendingDomain}>`;
   }
   const display = org ? `${org.senderName ?? org.orgName} via Recruvault` : "Recruvault";
-  return `${display} <no-reply@${shared}>`;
+  const address =
+    process.env.RESEND_FROM_EMAIL ??
+    (process.env.NODE_ENV === "production" ? `no-reply@${shared}` : "onboarding@resend.dev");
+  return `${display} <${address}>`;
 }
 
 async function isSuppressed(email: string): Promise<boolean> {
@@ -193,6 +196,41 @@ export async function sendRecruiterSubmissionAlert(opts: {
     body: `A candidate has responded to <strong>${opts.requestTitle}</strong>. Review it securely in Recruvault.`,
     ctaLabel: "Review submission",
     ctaUrl: opts.reviewUrl,
+  });
+}
+
+function safeText(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+export async function sendJobMatchAlert(opts: {
+  to: string;
+  org: OrgSender;
+  requestTitle: string;
+  location: string | null;
+  matchScore: number;
+  matchedSkills: string[];
+  rolesUrl: string;
+}) {
+  const skillText = opts.matchedSkills.map(safeText).join(", ");
+  const locationText = opts.location ? ` in ${safeText(opts.location)}` : "";
+  return sendEmail({
+    to: opts.to,
+    from: fromAddress(opts.org),
+    subject: `New role matching your job alerts — ${opts.requestTitle}`,
+    heading: "A role matches your job alerts",
+    body: `<strong>${safeText(opts.requestTitle)}</strong> from ${safeText(opts.org.orgName)}${locationText} matched ${opts.matchScore}% of the role skills in your alert preferences.${
+      skillText ? ` Matching skills: ${skillText}.` : ""
+    } Recruvault has not shared your identity, profile, or documents with the recruiter. Review the listing before deciding whether to proceed.`,
+    ctaLabel: "Review matching role",
+    ctaUrl: opts.rolesUrl,
+    footerNote:
+      "You received this because you opted in to Recruvault job alerts. Sign in and open Applications to change or stop your alerts at any time.",
   });
 }
 

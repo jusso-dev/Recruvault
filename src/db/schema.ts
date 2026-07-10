@@ -111,8 +111,14 @@ export const submissionStatus = pgEnum("submission_status", [
   "started",
   "received",
   "under_review",
+  "shortlisted",
+  "interview",
+  "offer",
   "accepted",
+  "placed",
   "follow_up",
+  "declined",
+  "withdrawn",
 ]);
 
 export const fieldType = pgEnum("field_type", [
@@ -202,6 +208,19 @@ export const organisations = pgTable("organisations", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+/** Organisation-wide guardrails for opt-in job-match notifications. */
+export const recruiterMatchSettings = pgTable("recruiter_match_settings", {
+  orgId: uuid("org_id")
+    .primaryKey()
+    .references(() => organisations.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(false),
+  minimumMatchScore: integer("minimum_match_score").notNull().default(50),
+  updatedBy: text("updated_by")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 export const memberships = pgTable(
   "memberships",
   {
@@ -242,7 +261,7 @@ export const walletItems = pgTable(
     candidateAccountId: uuid("candidate_account_id")
       .notNull()
       .references(() => candidateAccounts.id, { onDelete: "cascade" }),
-    // Semantic key from the field library, e.g. "clearance_level", "citizenship".
+    // Semantic key from the field library, e.g. "clearance_level".
     type: text("type").notNull(),
     valueEncrypted: text("value_encrypted").notNull(),
     dekId: uuid("dek_id")
@@ -261,7 +280,9 @@ export const walletDocuments = pgTable("wallet_documents", {
   candidateAccountId: uuid("candidate_account_id")
     .notNull()
     .references(() => candidateAccounts.id, { onDelete: "cascade" }),
-  kind: text("kind").notNull(), // passport | driver_licence | other evidence
+  // Only resume and cover_letter are accepted by the wallet action. This text
+  // column remains flexible for compatibility with older records.
+  kind: text("kind").notNull(),
   fileName: text("file_name").notNull(),
   contentType: text("content_type").notNull(),
   storageKey: text("storage_key").notNull(),
@@ -312,6 +333,53 @@ export const savedRoles = pgTable(
   (t) => [uniqueIndex("saved_roles_unique_idx").on(t.candidateAccountId, t.requestId)],
 );
 
+/** Explicit, revocable job-seeker consent and preferences for matched-role email alerts. */
+export const jobAlertSubscriptions = pgTable("job_alert_subscriptions", {
+  candidateAccountId: uuid("candidate_account_id")
+    .primaryKey()
+    .references(() => candidateAccounts.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(false),
+  skills: jsonb("skills").$type<string[]>().notNull().default([]),
+  locations: jsonb("locations").$type<string[]>().notNull().default([]),
+  employmentTypes: jsonb("employment_types").$type<string[]>().notNull().default([]),
+  workArrangements: jsonb("work_arrangements").$type<string[]>().notNull().default([]),
+  minimumSalary: integer("minimum_salary"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/** Deduplication and delivery ledger for automated match notifications. */
+export const jobMatchNotifications = pgTable(
+  "job_match_notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+    requestId: uuid("request_id")
+      .notNull()
+      .references(() => requests.id, { onDelete: "cascade" }),
+    candidateAccountId: uuid("candidate_account_id")
+      .notNull()
+      .references(() => candidateAccounts.id, { onDelete: "cascade" }),
+    matchScore: integer("match_score").notNull(),
+    matchedSkills: jsonb("matched_skills").$type<string[]>().notNull().default([]),
+    status: text("status").notNull().default("queued"),
+    providerMessageId: text("provider_message_id"),
+    sentAt: timestamp("sent_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("job_match_notifications_request_candidate_idx").on(
+      t.requestId,
+      t.candidateAccountId,
+    ),
+    index("job_match_notifications_org_idx").on(t.orgId),
+    index("job_match_notifications_candidate_idx").on(t.candidateAccountId),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // Requests, fields, documents, submissions
 // ---------------------------------------------------------------------------
@@ -328,6 +396,14 @@ export const requests = pgTable(
       .references(() => user.id),
     title: text("title").notNull(),
     description: text("description"),
+    location: text("location"),
+    employmentType: text("employment_type"),
+    workArrangement: text("work_arrangement"),
+    salaryMin: integer("salary_min"),
+    salaryMax: integer("salary_max"),
+    salaryPeriod: text("salary_period"),
+    // Search metadata for opt-in matching alerts; never a candidate response field.
+    skills: jsonb("skills").$type<string[]>().notNull().default([]),
     status: requestStatus("status").notNull().default("draft"),
     // Listed = discoverable to seekers the org engages with. Never a public board.
     listed: boolean("listed").notNull().default(false),
@@ -589,7 +665,7 @@ export const referenceValues = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").references(() => organisations.id, { onDelete: "cascade" }),
-    category: text("category").notNull(), // clearance_level | clearance_status | citizenship | right_to_work | police_check_status
+    category: text("category").notNull(), // currently seeded for clearance levels
     code: text("code").notNull(),
     label: text("label").notNull(),
     description: text("description"),
@@ -686,6 +762,25 @@ export const apiKeys = pgTable(
   (t) => [index("api_keys_org_idx").on(t.orgId)],
 );
 
+// Job-seeker API keys are intentionally separate from organisation keys. They
+// can only resolve the owning candidate account and never carry tenant access.
+export const candidateApiKeys = pgTable(
+  "candidate_api_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    candidateAccountId: uuid("candidate_account_id")
+      .notNull()
+      .references(() => candidateAccounts.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    keyHash: text("key_hash").notNull().unique(),
+    prefix: text("prefix").notNull(),
+    lastUsedAt: timestamp("last_used_at"),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [index("candidate_api_keys_owner_idx").on(t.candidateAccountId)],
+);
+
 // ---------------------------------------------------------------------------
 // Discovery profile: the opt-in, plaintext facts a job seeker consents to
 // expose so recruiters can match roles to them. Never documents, never wallet
@@ -699,6 +794,8 @@ export const discoveryProfiles = pgTable("discovery_profiles", {
   handle: text("handle").notNull().unique(),
   discoverable: boolean("discoverable").notNull().default(false),
   clearanceLevel: text("clearance_level"),
+  // Deprecated compatibility columns. New writes always clear these values;
+  // Recruvault no longer collects citizenship or right-to-work information.
   citizenship: text("citizenship"),
   rightToWork: text("right_to_work"),
   skills: jsonb("skills").$type<string[]>().notNull().default([]),

@@ -24,6 +24,7 @@ import { scanBytes, sniffContentType } from "@/lib/scan";
 import { audit } from "@/lib/audit";
 import { findPurgeDueSubmissionIds, purgeSubmission } from "@/lib/retention";
 import { getLogger } from "@/lib/logger";
+import { deliverJobMatch, queueJobMatches } from "@/lib/job-matches";
 
 const log = getLogger("inngest");
 const APP_URL = () => process.env.APP_URL ?? "http://localhost:3000";
@@ -413,6 +414,45 @@ export const emailEvents = inngest.createFunction(
   },
 );
 
+/** Match one newly listed role against explicitly subscribed job seekers. */
+export const listedRoleJobAlerts = inngest.createFunction(
+  {
+    id: "listed-role-job-alerts",
+    retries: 3,
+    triggers: [{ event: "job-alert/role-listed" }],
+  },
+  async ({ event, step }) => {
+    const { requestId } = parseEvent("job-alert/role-listed", event.data);
+    const ids = await step.run("queue-matches", () => queueJobMatches({ requestId }));
+    for (const notificationId of ids) {
+      await step.run(`deliver-${notificationId}`, () => deliverJobMatch(notificationId));
+    }
+    return { matched: ids.length };
+  },
+);
+
+/** Evaluate current listed roles when a job seeker enables or changes alerts. */
+export const subscriptionJobAlerts = inngest.createFunction(
+  {
+    id: "subscription-job-alerts",
+    retries: 3,
+    triggers: [{ event: "job-alert/subscription-updated" }],
+  },
+  async ({ event, step }) => {
+    const { candidateAccountId } = parseEvent(
+      "job-alert/subscription-updated",
+      event.data,
+    );
+    const ids = await step.run("queue-matches", () =>
+      queueJobMatches({ candidateAccountId }),
+    );
+    for (const notificationId of ids) {
+      await step.run(`deliver-${notificationId}`, () => deliverJobMatch(notificationId));
+    }
+    return { matched: ids.length };
+  },
+);
+
 export const functions = [
   deliverRequest,
   scanDocument,
@@ -421,4 +461,6 @@ export const functions = [
   purgeSubmissionJob,
   expiryReminders,
   emailEvents,
+  listedRoleJobAlerts,
+  subscriptionJobAlerts,
 ];

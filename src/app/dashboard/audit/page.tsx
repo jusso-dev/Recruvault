@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { requireOrgUser } from "@/lib/guards";
+import { requireDashboardUser } from "@/lib/dashboard-auth";
 import { listAuditEvents, verifyChain, verifyChainIncremental } from "@/lib/audit";
-import { Badge, Button, Card, CardContent } from "@/components/ui";
+import { Badge, ButtonLink, Card, CardContent } from "@/components/ui";
 
 const PAGE_SIZE = 100;
 
@@ -10,7 +10,7 @@ export default async function AuditPage({
 }: {
   searchParams: Promise<{ before?: string; full?: string }>;
 }) {
-  const ctx = await requireOrgUser("audit:view");
+  const ctx = await requireDashboardUser("audit:view");
   const sp = await searchParams;
   const beforeSeq = sp.before ? Number(sp.before) : undefined;
   const fullVerify = sp.full === "1";
@@ -34,16 +34,14 @@ export default async function AuditPage({
               : `TAMPERING DETECTED at seq ${integrity.brokenAtSeq}`}
           </Badge>
           {!fullVerify && (
-            <Link href="/dashboard/audit?full=1">
-              <Button variant="secondary" size="sm">
-                Full verify
-              </Button>
-            </Link>
+            <ButtonLink href="/dashboard/audit?full=1" variant="secondary" size="sm">
+              Full verify
+            </ButtonLink>
           )}
         </div>
       </div>
       <p className="text-sm text-stone-500">
-        Append-only and hash-chained. Events reference records by id only — no PII is
+        Append-only and hash-chained. Events reference records by id only, so no PII is
         ever written to the log, so it survives retention purges as a metadata-only
         record of handling.
       </p>
@@ -78,7 +76,7 @@ export default async function AuditPage({
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-stone-400">{e.ip ?? "—"}</td>
+                  <td className="px-4 py-2 text-stone-400">{e.ip ?? "Not recorded"}</td>
                 </tr>
               ))}
             </tbody>

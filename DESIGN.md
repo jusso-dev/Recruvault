@@ -1,6 +1,6 @@
 ---
 name: Recruvault
-description: Secure, audited exchange for cleared and government-adjacent hiring
+description: Placement-focused hiring workspace with secure, audited candidate exchange
 colors:
   paper: "oklch(0.985 0.006 75)"
   ink: "oklch(0.24 0.014 60)"
@@ -101,9 +101,9 @@ components:
 
 ## 1. Overview
 
-**Creative North Star: "The Compliance Ledger"**
+**Creative North Star: "The Placement Ledger"**
 
-Recruvault handles the most sensitive moment in hiring: a cleared candidate handing over clearance levels, identity documents, and right-to-work evidence. The interface has to feel like the physical thing it replaces at its best, a well-kept compliance ledger on good paper, not a consumer app and not a dark ops console. A recruiter or compliance officer reads it at a desk in daylight, scanning dense records and needing to trust every row. So the system is warm, quiet, and dense: paper-tinted neutrals, ink-black text, tabular figures, and a single deep oxblood accent that appears only where attention is earned.
+Recruvault carries a candidate from application to placement while protecting the sensitive documents that support that journey. The interface has to feel like the physical thing it replaces at its best, a well-kept placement ledger on good paper, not a consumer job board and not a dark ops console. A recruiter reads it at a desk in daylight, scanning a live hiring pipeline and needing to trust every row. A job seeker uses the same visual language to manage applications, resumes, cover letters, and sharing decisions. The system is warm, quiet, and dense: paper-tinted neutrals, ink-black text, tabular figures, and a single deep oxblood accent that appears only where attention is earned.
 
 Warmth is the strategic choice. Cool slate and corporate navy read as generic SaaS; a warm stone palette with an oxblood accent reads as considered, institutional, and human without being soft. The accent is rationed, not sprayed: it marks the brand, active navigation, links, focus, and selection, and nothing else. Everything structural is carried by hairline borders and tonal layering, not shadow or color.
 

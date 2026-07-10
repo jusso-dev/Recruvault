@@ -1,7 +1,7 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { apiKeys, memberships, organisations, user } from "@/db/schema";
-import { requireOrgUser } from "@/lib/guards";
+import { requireDashboardUser } from "@/lib/dashboard-auth";
 import { addMember, removeMember, updateMemberRole, updateOrgSettings, verifyDomain } from "@/actions/org";
 import { ASSIGNABLE_ROLES, can } from "@/lib/rbac";
 import { domainsEnabled, getSendingDomain } from "@/lib/resend-domains";
@@ -20,7 +20,7 @@ import {
 } from "@/components/ui";
 
 export default async function SettingsPage() {
-  const ctx = await requireOrgUser("users:manage");
+  const ctx = await requireDashboardUser("users:manage");
 
   const [org] = await db
     .select()
@@ -75,7 +75,7 @@ export default async function SettingsPage() {
           >
             <div>
               <Label htmlFor="retentionDays">
-                Retention — purge submissions this many days after submission
+                Retention: purge submissions this many days after submission
               </Label>
               <Input
                 id="retentionDays"
@@ -114,7 +114,7 @@ export default async function SettingsPage() {
               <p className="mt-1 text-xs text-stone-500">
                 {org.sendingDomainVerifiedAt
                   ? `Verified ${org.sendingDomainVerifiedAt.toLocaleDateString("en-AU")}.`
-                  : "Requires SPF, DKIM, and DMARC records — verification is completed in Resend. Until verified, mail goes via the shared Recruvault domain with your display name."}
+                  : "Requires SPF, DKIM, and DMARC records. Verification is completed in Resend. Until verified, mail goes via the shared Recruvault domain with your display name."}
               </p>
             </div>
             <Button type="submit">Save settings</Button>
@@ -177,7 +177,11 @@ export default async function SettingsPage() {
                   <Badge>owner</Badge>
                 ) : (
                   <div className="flex items-center gap-2">
-                    <ActionForm action={updateMemberRole} className="flex items-center gap-2">
+                    <ActionForm
+                      action={updateMemberRole}
+                      successMessage="Member role updated."
+                      className="flex items-center gap-2"
+                    >
                       <input type="hidden" name="membershipId" value={m.membership.id} />
                       <Select
                         name="role"
@@ -195,7 +199,7 @@ export default async function SettingsPage() {
                         Change
                       </Button>
                     </ActionForm>
-                    <ActionForm action={removeMember}>
+                    <ActionForm action={removeMember} successMessage="Member removed.">
                       <input type="hidden" name="membershipId" value={m.membership.id} />
                       <Button type="submit" variant="ghost" size="sm">
                         Remove

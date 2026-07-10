@@ -1,6 +1,7 @@
 /**
- * The field library: typed fields a recruiter can request. Clearance and
- * identity fields are first-class.
+ * The field library: the deliberately small set of facts a recruiter can ask
+ * for when creating a role. Recruvault does not collect identity documents,
+ * police checks, citizenship evidence, or right-to-work documents.
  *
  * Clearance levels are seeded with current AGSVA values but are an
  * admin-configurable reference list (reference_values table), never hardcoded
@@ -32,7 +33,6 @@ export interface FieldDefinition {
 }
 
 export const FIELD_LIBRARY: FieldDefinition[] = [
-  // --- Clearance ---
   {
     key: "clearance_level",
     type: "single_select",
@@ -43,107 +43,13 @@ export const FIELD_LIBRARY: FieldDefinition[] = [
     referenceCategory: "clearance_level",
   },
   {
-    key: "clearance_status",
-    type: "single_select",
-    label: "Clearance status",
-    sensitive: true,
-    walletType: "clearance_status",
-    referenceCategory: "clearance_status",
-  },
-  {
-    key: "clearance_grant_date",
-    type: "date",
-    label: "Clearance grant date",
-    sensitive: true,
-    walletType: "clearance_grant_date",
-  },
-  {
-    key: "clearance_expiry_date",
-    type: "date",
-    label: "Clearance expiry date",
-    sensitive: true,
-    walletType: "clearance_expiry_date",
-  },
-  {
-    key: "clearance_revalidation_date",
-    type: "date",
-    label: "Next revalidation date",
-    sensitive: true,
-    walletType: "clearance_revalidation_date",
-  },
-  {
-    key: "sponsoring_agency",
+    key: "clearance_id",
     type: "short_text",
-    label: "Sponsoring agency or department",
-    helpText: "Clearances are sponsored — which agency or department sponsors yours?",
+    label: "Security clearance ID",
+    helpText: "Your AGSVA clearance identifier.",
     sensitive: true,
-    walletType: "sponsoring_agency",
+    walletType: "clearance_id",
   },
-  // --- Identity and eligibility ---
-  {
-    key: "citizenship",
-    type: "single_select",
-    label: "Citizenship",
-    helpText:
-      "Australian citizenship is the base eligibility requirement for a clearance.",
-    sensitive: true,
-    walletType: "citizenship",
-    referenceCategory: "citizenship",
-  },
-  {
-    key: "photo_id",
-    type: "file_upload",
-    label: "Government photo ID",
-    helpText: "Passport or driver licence. Uploaded securely, never emailed.",
-    sensitive: true,
-    walletType: "photo_id",
-  },
-  {
-    key: "id_document_type",
-    type: "single_select",
-    label: "ID document type",
-    sensitive: true,
-    walletType: "id_document_type",
-    referenceCategory: "id_document_type",
-  },
-  {
-    key: "id_document_number",
-    type: "short_text",
-    label: "ID document number",
-    sensitive: true,
-    walletType: "id_document_number",
-  },
-  {
-    key: "id_document_expiry",
-    type: "date",
-    label: "ID document expiry",
-    sensitive: true,
-    walletType: "id_document_expiry",
-  },
-  {
-    key: "right_to_work",
-    type: "single_select",
-    label: "Right to work / visa status",
-    sensitive: true,
-    walletType: "right_to_work",
-    referenceCategory: "right_to_work",
-  },
-  {
-    key: "police_check_status",
-    type: "single_select",
-    label: "Police check status",
-    sensitive: true,
-    walletType: "police_check_status",
-    referenceCategory: "police_check_status",
-  },
-  {
-    key: "police_check_date",
-    type: "date",
-    label: "Police check date",
-    sensitive: true,
-    walletType: "police_check_date",
-  },
-  // --- Standard attachments (requested on almost every role) ---
   {
     key: "resume",
     type: "file_upload",
@@ -153,11 +59,12 @@ export const FIELD_LIBRARY: FieldDefinition[] = [
     walletType: "resume",
   },
   {
-    key: "suitability_statement",
-    type: "long_text",
-    label: "Suitability statement",
-    helpText: "A short statement on why you are suited to this role.",
+    key: "cover_letter",
+    type: "file_upload",
+    label: "Cover letter / suitability statement",
+    helpText: "A tailored cover letter or suitability statement (PDF or Word).",
     sensitive: false,
+    walletType: "cover_letter",
   },
 ];
 
@@ -173,6 +80,13 @@ export function fieldDefinition(key: string): FieldDefinition | undefined {
 export interface RequestTemplateDefinition {
   title: string;
   description: string | null;
+  location?: string | null;
+  employmentType?: string | null;
+  workArrangement?: string | null;
+  salaryMin?: number | null;
+  salaryMax?: number | null;
+  salaryPeriod?: string | null;
+  skills?: string[];
   libraryKeys: string[];
   customLabels: string[];
   jdViewMode: "view_only" | "allow_download";
@@ -242,36 +156,6 @@ export const REFERENCE_SEED: ReferenceSeed[] = [
     description: "No clearance held.",
     sortOrder: 6,
   },
-  // Clearance status
-  { category: "clearance_status", code: "active", label: "Active", sortOrder: 1 },
-  { category: "clearance_status", code: "lapsed", label: "Lapsed", sortOrder: 2 },
-  { category: "clearance_status", code: "in_progress", label: "In progress", sortOrder: 3 },
-  { category: "clearance_status", code: "sponsored", label: "Sponsored", sortOrder: 4 },
-  { category: "clearance_status", code: "ceased", label: "Ceased", sortOrder: 5 },
-  // Citizenship
-  { category: "citizenship", code: "au_citizen", label: "Australian citizen", sortOrder: 1 },
-  {
-    category: "citizenship",
-    code: "au_pr",
-    label: "Australian permanent resident",
-    sortOrder: 2,
-  },
-  { category: "citizenship", code: "dual", label: "Dual citizen (incl. Australian)", sortOrder: 3 },
-  { category: "citizenship", code: "other", label: "Other", sortOrder: 4 },
-  // Right to work
-  { category: "right_to_work", code: "citizen", label: "Citizen — unrestricted", sortOrder: 1 },
-  { category: "right_to_work", code: "pr", label: "Permanent resident — unrestricted", sortOrder: 2 },
-  { category: "right_to_work", code: "visa_unrestricted", label: "Visa — unrestricted work rights", sortOrder: 3 },
-  { category: "right_to_work", code: "visa_restricted", label: "Visa — restricted work rights", sortOrder: 4 },
-  { category: "right_to_work", code: "none", label: "No current right to work", sortOrder: 5 },
-  // Police check
-  { category: "police_check_status", code: "clear", label: "Completed — no disclosable outcomes", sortOrder: 1 },
-  { category: "police_check_status", code: "disclosed", label: "Completed — disclosable outcomes", sortOrder: 2 },
-  { category: "police_check_status", code: "in_progress", label: "In progress", sortOrder: 3 },
-  { category: "police_check_status", code: "not_held", label: "Not held", sortOrder: 4 },
-  // ID document types
-  { category: "id_document_type", code: "passport", label: "Passport", sortOrder: 1 },
-  { category: "id_document_type", code: "driver_licence", label: "Driver licence", sortOrder: 2 },
 ];
 
 // Upload constraints for controlled document uploads.
@@ -279,7 +163,7 @@ export const UPLOAD_MAX_BYTES = 15 * 1024 * 1024; // 15 MB
 
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-// Default allowlist for responder/wallet uploads (evidence: scans and photos).
+// Controlled uploads may be PDFs or common image formats.
 export const UPLOAD_ALLOWED_TYPES = [
   "application/pdf",
   "image/jpeg",
@@ -287,17 +171,43 @@ export const UPLOAD_ALLOWED_TYPES = [
   "image/webp",
 ];
 
-// Job descriptions and resumes are documents, so they also accept Word (.docx).
+// Job descriptions, resumes, and cover letters are documents, so they accept Word (.docx).
 export const JD_ALLOWED_TYPES = ["application/pdf", DOCX];
 export const RESUME_ALLOWED_TYPES = ["application/pdf", DOCX];
+
+export const WALLET_DOCUMENT_TYPES = [
+  { type: "resume", label: "Resume / CV", group: "career" },
+  { type: "cover_letter", label: "Cover letter / suitability statement", group: "career" },
+] as const;
+
+export const CAREER_DOCUMENT_KINDS = new Set<string>(
+  WALLET_DOCUMENT_TYPES.filter((type) => type.group === "career").map((type) => type.type),
+);
+
+export function allowedTypesForWalletDocument(kind: string): string[] {
+  if (["resume", "cover_letter"].includes(kind)) {
+    return RESUME_ALLOWED_TYPES;
+  }
+  return [];
+}
 
 /**
  * Allowed content types for a requested file field, by field key. Resume
  * accepts PDF or Word; everything else stays PDF/image only.
  */
 export function allowedTypesForField(key: string): string[] {
-  return key === "resume" ? RESUME_ALLOWED_TYPES : UPLOAD_ALLOWED_TYPES;
+  return ["resume", "cover_letter"].includes(key)
+    ? RESUME_ALLOWED_TYPES
+    : UPLOAD_ALLOWED_TYPES;
 }
 
-// Requested items added to (almost) every request by default; still removable.
-export const DEFAULT_REQUEST_FIELD_KEYS = ["resume", "suitability_statement"];
+// The complete set a recruiter may ask for on a new role.
+export const ROLE_REQUEST_FIELD_KEYS = [
+  "clearance_level",
+  "clearance_id",
+  "resume",
+  "cover_letter",
+] as const;
+
+// Career documents default on; clearance details remain optional per role.
+export const DEFAULT_REQUEST_FIELD_KEYS = ["resume", "cover_letter"];

@@ -4,37 +4,58 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { requestOtp, verifyOtp } from "@/actions/link";
 import { Button, Input, Label } from "@/components/ui";
+import { useToast } from "@/components/toast";
+import { userFacingError } from "@/lib/user-facing-errors";
 
 export function OtpVerify({ token }: { token: string }) {
   const router = useRouter();
   const [stage, setStage] = useState<"start" | "code">("start");
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { showToast } = useToast();
 
   async function sendCode() {
     setBusy(true);
-    setError(null);
-    const res = await requestOtp(token);
-    setBusy(false);
-    if (!res.ok) {
-      setError(res.error ?? "Could not send the code.");
-      return;
+    try {
+      const res = await requestOtp(token);
+      if (!res.ok) {
+        showToast({
+          tone: "error",
+          message: userFacingError(res.error, "We couldn’t send the code. Please try again."),
+        });
+        return;
+      }
+      setStage("code");
+      showToast({
+        tone: "success",
+        title: "Code sent",
+        message: "Check your email for a six-digit verification code.",
+      });
+    } catch (error) {
+      showToast({ tone: "error", message: userFacingError(error) });
+    } finally {
+      setBusy(false);
     }
-    setStage("code");
   }
 
   async function onVerify(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    setError(null);
-    const code = String(new FormData(e.currentTarget).get("code") ?? "");
-    const res = await verifyOtp(token, code);
-    setBusy(false);
-    if (!res.ok) {
-      setError(res.error ?? "Verification failed.");
-      return;
+    try {
+      const code = String(new FormData(e.currentTarget).get("code") ?? "");
+      const res = await verifyOtp(token, code);
+      if (!res.ok) {
+        showToast({
+          tone: "error",
+          message: userFacingError(res.error, "That code didn’t work. Check it and try again."),
+        });
+        return;
+      }
+      router.push(`/r/${token}/respond`);
+    } catch (error) {
+      showToast({ tone: "error", message: userFacingError(error) });
+    } finally {
+      setBusy(false);
     }
-    router.push(`/r/${token}/respond`);
   }
 
   if (stage === "start") {
@@ -43,7 +64,6 @@ export function OtpVerify({ token }: { token: string }) {
         <Button onClick={sendCode} disabled={busy} className="w-full">
           {busy ? "Sending…" : "Send me the code"}
         </Button>
-        {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
     );
   }
@@ -63,7 +83,6 @@ export function OtpVerify({ token }: { token: string }) {
           className="text-center text-lg tracking-[0.5em]"
         />
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
       <Button type="submit" disabled={busy} className="w-full">
         {busy ? "Verifying…" : "Verify and continue"}
       </Button>

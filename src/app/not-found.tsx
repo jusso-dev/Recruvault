@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { Button } from "@/components/ui";
+import { ButtonLink } from "@/components/ui";
 
 export default function NotFound() {
   return (
@@ -8,9 +7,7 @@ export default function NotFound() {
       <p className="text-sm text-stone-600">
         The page you&apos;re looking for doesn&apos;t exist or may have expired.
       </p>
-      <Link href="/">
-        <Button>Go home</Button>
-      </Link>
+      <ButtonLink href="/">Go home</ButtonLink>
     </main>
   );
 }
