@@ -5,7 +5,10 @@
 # S3_ENDPOINT at real AWS S3 (ap-southeast-2) if you'd rather use AWS.
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        TRUSTED_DOMAINS: ${TRUSTED_DOMAINS:-localhost,192.168.1.19,100.80.178.73}
     ports:
       - "3000:3000"
     environment:
