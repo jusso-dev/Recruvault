@@ -1,19 +1,29 @@
 import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV === "development";
+const trustedDomains = (process.env.TRUSTED_DOMAINS || "localhost").split(",").map(d => d.trim());
 
 // Dev needs 'unsafe-eval' (React/Turbopack debugging) and a websocket source
 // for HMR; production stays strict.
 const scriptSrc = isDev
   ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
   : "script-src 'self' 'unsafe-inline'";
-const connectSrc = isDev ? "connect-src 'self' ws:" : "connect-src 'self'";
+const trustedDomainsStr = trustedDomains.map(d => `https://${d}`).join(" ");
+const connectSrc = isDev
+  ? `connect-src 'self' ws: ${trustedDomainsStr}`
+  : `connect-src 'self' ${trustedDomainsStr}`;
 
 const nextConfig: NextConfig = {
   distDir: process.env.NEXT_DIST_DIR ?? ".next",
   output: "standalone",
   poweredByHeader: false,
   devIndicators: process.env.PLAYWRIGHT_TEST === "1" ? false : undefined,
+  images: {
+    remotePatterns: trustedDomains.map(domain => ({
+      protocol: "https",
+      hostname: domain,
+    })) as any,
+  },
   async headers() {
     return [
       {
