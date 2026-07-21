@@ -11,7 +11,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY .env .env
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm build || echo 'Build failed - continuing with source'
+RUN pnpm build
 RUN mkdir -p .next/standalone .next/static public
 
 FROM node:22-alpine AS migrate
