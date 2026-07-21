@@ -20,7 +20,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json drizzle.config.ts ./
 COPY drizzle ./drizzle
 COPY src/db ./src/db
-CMD ["pnpm", "dlx", "drizzle-kit", "migrate"]
+CMD ["pnpm", "exec", "drizzle-kit", "migrate"]
 
 FROM node:22-alpine AS runner
 WORKDIR /app
