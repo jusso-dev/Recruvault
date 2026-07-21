@@ -17,6 +17,14 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        source: "/api/(.*)",
+        headers: [
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          { key: "Access-Control-Allow-Methods", value: "GET, POST, PUT, DELETE, PATCH, OPTIONS" },
+          { key: "Access-Control-Allow-Headers", value: "Content-Type, Authorization" },
+        ],
+      },
+      {
         // Everything except the API docs page, which sets its own CSP so the
         // self-contained Scalar reference can load without weakening the global
         // policy.
