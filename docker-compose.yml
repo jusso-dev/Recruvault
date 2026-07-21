@@ -9,6 +9,7 @@ services:
     ports:
       - "3000:3000"
     environment:
+      TRUSTED_DOMAINS: ${TRUSTED_DOMAINS:-localhost,192.168.1.19,100.80.178.73}
       DATABASE_URL: postgres://recruvault:recruvault@db:5432/recruvault
       APP_URL: ${APP_URL:-http://localhost:3000}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
