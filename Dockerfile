@@ -15,7 +15,7 @@ RUN pnpm build
 
 FROM node:22-alpine AS migrate
 WORKDIR /app
-RUN corepack enable
+RUN npm install -g pnpm@10
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json drizzle.config.ts ./
 COPY drizzle ./drizzle
