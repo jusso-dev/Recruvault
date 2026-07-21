@@ -1,12 +1,12 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
-RUN corepack enable
+RUN npm install -g pnpm@10
 COPY package.json pnpm-lock.yaml* ./
 RUN pnpm install --no-frozen-lockfile || true
 
 FROM node:22-alpine AS build
 WORKDIR /app
-RUN corepack enable
+RUN npm install -g pnpm@10
 COPY --from=deps /app/node_modules ./node_modules
 COPY .env .env
 COPY . .
