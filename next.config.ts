@@ -65,7 +65,6 @@ const nextConfig: NextConfig = {
               "form-action 'self'",
               "frame-ancestors 'none'",
               "frame-src 'self'",
-              "upgrade-insecure-requests",
             ].join("; "),
           },
           {
