@@ -27,10 +27,9 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 RUN addgroup -S app && adduser -S app -G app
-RUN mkdir -p .next/standalone .next/static public
-RUN --mount=type=bind,from=build,source=/app/.next/standalone,target=/src/.next/standalone cp -r /src/.next/standalone/* ./ 2>/dev/null || true
-RUN --mount=type=bind,from=build,source=/app/.next/static,target=/src/.next/static cp -r /src/.next/static/* ./.next/static/ 2>/dev/null || true
-RUN --mount=type=bind,from=build,source=/app/public,target=/src/public cp -r /src/public/* ./public/ 2>/dev/null || true
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+COPY --from=build /app/public ./public
 RUN chown -R app:app /app
 USER app
 EXPOSE 3000
