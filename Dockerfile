@@ -11,7 +11,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY .env .env
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm build && ls -la .next/standalone/ | head -5
+RUN pnpm build
 
 FROM node:22-alpine AS migrate
 WORKDIR /app
@@ -29,7 +29,6 @@ RUN addgroup -S app && adduser -S app -G app
 COPY --from=build /app/.next/standalone ./.next/standalone
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
-RUN ls -la ./.next/standalone/ 2>/dev/null | head -10 || echo "No .next/standalone"
 RUN chown -R app:app /app
 USER app
 EXPOSE 3000
