@@ -7,8 +7,8 @@ coverage
 playwright-report
 test-results
 .playwright
-.env
-.env.*
+.env.local
+.env.*.local
 !.env.example
 *.log
 .DS_Store
