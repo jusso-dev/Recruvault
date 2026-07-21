@@ -8,6 +8,7 @@ FROM node:22-alpine AS build
 WORKDIR /app
 RUN corepack enable
 COPY --from=deps /app/node_modules ./node_modules
+COPY .env .env
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build || echo 'Build failed - continuing with source'
