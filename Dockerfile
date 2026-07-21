@@ -27,10 +27,10 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 RUN addgroup -S app && adduser -S app -G app
-COPY --from=build /app/.next/standalone ./.next/standalone
+COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 RUN chown -R app:app /app
 USER app
 EXPOSE 3000
-CMD ["node", ".next/standalone/server.js"]
+CMD ["node", "server.js"]
