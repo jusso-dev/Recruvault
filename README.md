@@ -129,6 +129,23 @@ Next.js 16 (App Router) · TypeScript · Tailwind · BetterAuth · PostgreSQL + 
 
 Interactive API documentation is available at `/api/v1/docs`, with the OpenAPI 3.1 document at `/api/v1/openapi.json`. Signed-in users can create scoped keys, copy MCP configuration, or copy a ready-to-use coding-agent setup prompt from **API & MCP** in their workspace navigation.
 
+## Deploy on Railway
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new?template=https://github.com/jusso-dev/Recruvault&utm_medium=integration&utm_source=button&utm_campaign=recruvault)
+
+Recruvault ships `railway.json` and `Dockerfile.railway`. Railway builds the app image from that Dockerfile, runs `npm run db:migrate && npm run db:seed` as a pre-deploy command, and health-checks `/api/health`.
+
+Wire these before the service can serve traffic:
+
+| Need | How |
+| --- | --- |
+| PostgreSQL | Add Railway Postgres and link it so `DATABASE_URL` is injected |
+| Object storage | Railway bucket or any S3-compatible store — set `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optional `S3_ENDPOINT` / `S3_FORCE_PATH_STYLE` |
+| Virus scanning | Point `CLAMAV_HOST` / `CLAMAV_PORT` at ClamAV (`SCAN_DISABLED=true` is refused in production) |
+| App secrets | Generate `BETTER_AUTH_SECRET` and `LOCAL_KEK` with `openssl rand -hex 32`; set `APP_URL` to the public domain Railway assigns |
+
+After the deployment is healthy, open the Recruvault domain and visit `/setup` to create the first owner account and organisation. Then set `ALLOW_RECRUITER_SIGNUP=false` on the Recruvault service to close recruiter self-registration. Email delivery is logged until you add `RESEND_API_KEY` and a verified `RESEND_FROM_EMAIL`; background delivery and retention jobs require Inngest Cloud values for `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`.
+
 ## Local development
 
 ```bash
