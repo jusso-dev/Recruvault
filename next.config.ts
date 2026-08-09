@@ -19,10 +19,10 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   devIndicators: process.env.PLAYWRIGHT_TEST === "1" ? false : undefined,
   images: {
-    remotePatterns: trustedDomains.map(domain => ({
-      protocol: "https",
+    remotePatterns: trustedDomains.map((domain) => ({
+      protocol: "https" as const,
       hostname: domain,
-    })) as any,
+    })),
   },
   async headers() {
     return [
