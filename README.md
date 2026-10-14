@@ -129,23 +129,6 @@ Next.js 16.4 (App Router) · React 19.3 · TypeScript · Tailwind · BetterAuth 
 
 Interactive API documentation is available at `/api/v1/docs`, with the OpenAPI 3.1 document at `/api/v1/openapi.json`. Signed-in users can create scoped keys, copy MCP configuration, or copy a ready-to-use coding-agent setup prompt from **API & MCP** in their workspace navigation.
 
-## Deploy on Railway
-
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new?template=https://github.com/jusso-dev/Recruvault&utm_medium=integration&utm_source=button&utm_campaign=recruvault)
-
-Recruvault ships `railway.json` and `Dockerfile.railway`. Railway builds the app image from that Dockerfile, invokes the migration and seed tools directly with Node as a pre-deploy command, and health-checks `/api/health`. Runtime images omit npm and Yarn; development commands remain available through npm locally.
-
-Wire these before the service can serve traffic:
-
-| Need | How |
-| --- | --- |
-| PostgreSQL | Add Railway Postgres and link it so `DATABASE_URL` is injected |
-| Object storage | Railway bucket or any S3-compatible store — set `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optional `S3_ENDPOINT` / `S3_FORCE_PATH_STYLE` |
-| Virus scanning | Point `CLAMAV_HOST` / `CLAMAV_PORT` at ClamAV (`SCAN_DISABLED=true` is refused in production) |
-| App secrets | Generate `BETTER_AUTH_SECRET`, `LOCAL_KEK`, and `BOOTSTRAP_TOKEN` with `openssl rand -hex 32` (three different values); set `APP_URL` to the public domain Railway assigns and leave `ALLOW_RECRUITER_SIGNUP=false` |
-
-Configure email first (below), because the owner must verify their address. After the deployment is healthy, give the intended owner the `BOOTSTRAP_TOKEN` over a separate channel. They open `/setup`, create the owner account, follow the verification link back to `/setup`, and submit the organisation name, the token, and a new encryption key. Setup then closes on every replica permanently; replace the `BOOTSTRAP_TOKEN` variable with a fresh unused value. If an install is interrupted after an organisation exists but before it has an owner, set `BOOTSTRAP_RECOVERY_TOKEN` and follow the recovery steps in [docs/operations.md](docs/operations.md#first-owner-bootstrap). Recruiter self-registration stays closed unless you set `ALLOW_RECRUITER_SIGNUP=true`. Configure `RESEND_API_KEY` and a verified `RESEND_FROM_EMAIL` before onboarding: production rejects email delivery without a provider instead of logging authentication links or OTPs. Background delivery and retention jobs require Inngest Cloud values for `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`.
-
 ## Local development
 
 Use Node.js 22.19 or later for the app and MCP server.

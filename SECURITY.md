@@ -11,11 +11,8 @@ security requirements that are still open. Customer keys are enrolled per organi
 Use the committed npm lockfiles for both the application and `mcp/`. Docker
 builds use `npm ci` and must fail on installation errors. Environment files
 are excluded from the Docker context; supply deployment secrets at runtime.
-Both runtime images patch Alpine packages and omit npm, Yarn, and Corepack.
-The Railway image retains only the installed dependency closure needed for
-migration/seeding, plus the traced app dependencies. It invokes tool entry
-points with Node and excludes unrelated development tools such as Inngest CLI
-and ESLint. Scan both final images as well as the development lockfile.
+The runtime and migrate images patch Alpine packages and omit npm, Yarn, and
+Corepack. Scan both final images as well as the development lockfile.
 
 Run the following after dependency changes:
 
@@ -45,7 +42,7 @@ production-mode smoke test (`scripts/smoke-production.mjs`: security headers,
 secure session cookies, and refusal to start with test switches), and the MCP
 audit. CI audits runtime dependencies and reports the full development audit.
 Trivy scans both lockfiles including development dependencies and the
-`runner`, `migrate`, and Railway images. It uploads every high/critical
+`runner` and `migrate` images. It uploads every high/critical
 finding, including unfixed ones, to code scanning and fails only on findings
 that have a fixed version. The image job also fails if any layer contains an
 `.env` file. Base images and Compose services are pinned by digest.
