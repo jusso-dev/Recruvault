@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Resend } from "resend";
 import { eq } from "drizzle-orm";
@@ -77,11 +77,14 @@ interface EmailContent {
  * here; tests use it to follow the same links and OTPs a person receives.
  */
 async function recordPlaywrightEmail(c: EmailContent) {
-  if (process.env.PLAYWRIGHT_TEST !== "1") return false;
+  if (process.env.PLAYWRIGHT_TEST !== "1" || process.env.NODE_ENV === "production") return false;
   const directory = join(process.cwd(), ".playwright", "outbox");
   await mkdir(directory, { recursive: true });
+  // Publish only complete messages; the test reader ignores temporary files.
+  const finalPath = join(directory, `${Date.now()}-${randomUUID()}.json`);
+  const temporaryPath = `${finalPath}.tmp`;
   await writeFile(
-    join(directory, `${Date.now()}-${randomUUID()}.json`),
+    temporaryPath,
     JSON.stringify({
       to: c.to.toLowerCase(),
       subject: c.subject,
@@ -91,6 +94,7 @@ async function recordPlaywrightEmail(c: EmailContent) {
     }),
     { encoding: "utf8", mode: 0o600 },
   );
+  await rename(temporaryPath, finalPath);
   return true;
 }
 
@@ -139,6 +143,9 @@ export async function sendEmail(c: EmailContent): Promise<string | null> {
   if (await isSuppressed(c.to)) return null;
   if (await recordPlaywrightEmail(c)) return `playwright-${randomUUID()}`;
   if (!process.env.RESEND_API_KEY) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Email delivery is not configured.");
+    }
     // Dev fallback: log instead of failing hard so local flows keep working.
     log.info(
       { to: c.to, subject: c.subject, code: c.code, url: c.ctaUrl },

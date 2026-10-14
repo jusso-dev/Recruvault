@@ -37,7 +37,7 @@ jobs:
           severity: HIGH,CRITICAL
           limit-severities-for-sarif: true
           ignore-unfixed: true
-          exit-code: "0"
+          exit-code: "1"
 
       - name: Upload code scanning results
         if: always() && hashFiles('trivy-results.sarif') != ''

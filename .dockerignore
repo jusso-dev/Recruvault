@@ -3,12 +3,14 @@
 .next
 .next-e2e
 node_modules
+**/node_modules
 coverage
 playwright-report
 test-results
 .playwright
-.env.local
-.env.*.local
+.runtime-tools
+.env
+.env.*
 !.env.example
 *.log
 .DS_Store

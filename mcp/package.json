@@ -4,10 +4,14 @@
   "private": true,
   "type": "module",
   "description": "MCP server for Recruvault: create requests, upload JDs, match candidates, send secure links.",
-  "bin": { "recruvault-mcp": "index.mjs" },
-  "engines": { "node": ">=18" },
+  "bin": {
+    "recruvault-mcp": "index.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "zod": "^3.23.8"
   }
 }

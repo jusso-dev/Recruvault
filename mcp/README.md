@@ -1,5 +1,7 @@
 # Recruvault MCP server
 
+Requires Node.js 22.19 or later.
+
 Lets recruiter and job-seeker AI agents (Claude Code, Codex, and other MCP
 clients) work with Recruvault. Recruiters can manage role workflows. Job seekers
 can review applications, inspect career-document status, and update their

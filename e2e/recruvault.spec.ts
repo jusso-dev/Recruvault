@@ -138,7 +138,9 @@ test("creates recruiter, reviewer, and job-seeker accounts through the UI", asyn
       await page.getByLabel("Confirm password").fill(accounts.bootstrap.password);
       await page.getByRole("button", { name: "Create owner and organisation" }).click();
       await page.waitForURL("**/dashboard");
-      await expect(page.getByText("E2E Platform Bootstrap")).toBeVisible();
+      await expect(
+        page.getByRole("complementary").getByText("E2E Platform Bootstrap", { exact: true }),
+      ).toBeVisible();
       await page.getByRole("button", { name: "Sign out" }).click();
     }
 

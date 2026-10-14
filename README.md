@@ -115,17 +115,17 @@ This is a passion project: public, MIT-licensed, and self-hostable by anyone. Is
 - **Dual-consent matched role alerts** — recruiters opt in at organisation level and choose a minimum skill-match threshold; job seekers independently subscribe with skills, locations, employment types, work arrangements, and salary/rate preferences. Only open, listed roles generate deduplicated emails, and matching never exposes job-seeker identity, profile data, or documents to recruiters.
 - **Favourite / saved roles** — seekers see roles sent to them, roles they responded to, and roles listed by orgs they've engaged with. Never a public job board.
 - **REST API and MCP** — role-aware developer access for recruiters and job seekers, including copyable setup and reporting prompts. The recruiter report covers outstanding information, previous-month applications, unfilled roles, stage aging, stalled candidates, application velocity, deadlines, weekly priorities, and matched-alert performance. Job-seeker keys remain limited to their owner-scoped applications, career-document metadata, and safe discovery profile.
-- **Secure requests** — JD attachment (encrypted, virus-scanned, and served with a per-view watermark burned into the PDF), field library seeded with current AGSVA clearance levels (configurable — the PV → TS-PA transition is live), delivery + expiry settings, consent gate.
+- **Secure requests** — JD attachment (privately stored, virus-scanned, and served with a per-view watermark burned into the PDF), field library seeded with current AGSVA clearance levels (configurable — the PV → TS-PA transition is live), delivery + expiry settings, consent gate.
 - **Delivery** — opaque single-purpose expiring links by email (Resend) and SMS (AWS SNS), sent through Inngest with retries. Recruiters see sent / opened / started / submitted without seeing data before submission.
 - **Job seeker flow** — mobile-first: OTP step-up (defends forwarded links), versioned consent with IP + timestamp, watermarked JD view (viewer identity + timestamp burned into every page for traceability), wallet pre-fill, controlled uploads (type/size limits, content sniffing, ClamAV before visibility).
 - **Review and export** — in-browser rendering through authorised audited routes (no public URLs), submission statuses, CSV/JSON export of decrypted structured data as a logged, role-gated action.
 - **Security core** — envelope encryption (per-record DEKs wrapped by a self-managed master key, no external KMS), field-level encryption for PII, and private S3-compatible object storage. AWS S3 uses SSE-S3 (AES-256); MinIO can opt in when its KMS is configured.
 - **Audit trail** — append-only, hash-chained per organisation, tamper-evident (integrity is verified on the audit page). No PII in the log; survives purges as a metadata-only record.
-- **Retention and deletion** — per-org retention windows enforced by a scheduled purge; deletion is a crypto-shred (destroy the DEK, then remove rows and objects); full job-seeker erasure honouring APP 11.2.
+- **Retention and deletion** — per-org retention windows enforced by a scheduled purge; structured values are crypto-shredded by destroying their DEKs, and document objects are deleted from storage. Job-seeker career-record erasure is available; full authentication-account deletion and durable storage-deletion retries are tracked in the release backlog.
 
 ## Stack
 
-Next.js 16 (App Router) · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/SNS (or MinIO) · ClamAV · Docker Compose.
+Next.js 16.4 (App Router) · React 19.3 · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/SNS (or MinIO) · ClamAV · Docker Compose.
 
 Interactive API documentation is available at `/api/v1/docs`, with the OpenAPI 3.1 document at `/api/v1/openapi.json`. Signed-in users can create scoped keys, copy MCP configuration, or copy a ready-to-use coding-agent setup prompt from **API & MCP** in their workspace navigation.
 
@@ -133,7 +133,7 @@ Interactive API documentation is available at `/api/v1/docs`, with the OpenAPI 3
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new?template=https://github.com/jusso-dev/Recruvault&utm_medium=integration&utm_source=button&utm_campaign=recruvault)
 
-Recruvault ships `railway.json` and `Dockerfile.railway`. Railway builds the app image from that Dockerfile, runs `npm run db:migrate && npm run db:seed` as a pre-deploy command, and health-checks `/api/health`.
+Recruvault ships `railway.json` and `Dockerfile.railway`. Railway builds the app image from that Dockerfile, invokes the migration and seed tools directly with Node as a pre-deploy command, and health-checks `/api/health`. Runtime images omit npm and Yarn; development commands remain available through npm locally.
 
 Wire these before the service can serve traffic:
 
@@ -144,9 +144,11 @@ Wire these before the service can serve traffic:
 | Virus scanning | Point `CLAMAV_HOST` / `CLAMAV_PORT` at ClamAV (`SCAN_DISABLED=true` is refused in production) |
 | App secrets | Generate `BETTER_AUTH_SECRET` and `LOCAL_KEK` with `openssl rand -hex 32`; set `APP_URL` to the public domain Railway assigns |
 
-After the deployment is healthy, open the Recruvault domain and visit `/setup` to create the first owner account and organisation. Then set `ALLOW_RECRUITER_SIGNUP=false` on the Recruvault service to close recruiter self-registration. Email delivery is logged until you add `RESEND_API_KEY` and a verified `RESEND_FROM_EMAIL`; background delivery and retention jobs require Inngest Cloud values for `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`.
+After the deployment is healthy, open the Recruvault domain and visit `/setup` to create the first owner account and organisation. Then set `ALLOW_RECRUITER_SIGNUP=false` on the Recruvault service to close recruiter self-registration. Configure `RESEND_API_KEY` and a verified `RESEND_FROM_EMAIL` before onboarding: production rejects email delivery without a provider instead of logging authentication links or OTPs. Background delivery and retention jobs require Inngest Cloud values for `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`.
 
 ## Local development
+
+Use Node.js 22.19 or later for the app and MCP server.
 
 ```bash
 cp .env.example .env.local   # fill in BETTER_AUTH_SECRET and LOCAL_KEK (openssl rand -hex 32)
@@ -182,7 +184,7 @@ RESEND_API_KEY=re_your_key
 RESEND_FROM_EMAIL=onboarding@resend.dev
 ```
 
-`onboarding@resend.dev` is suitable for local testing and can deliver only to the email address associated with your Resend account. To send verification links, magic links, invitations, and notifications to other recipients, verify a domain in Resend and set `RESEND_FROM_EMAIL` to an address on that domain, such as `no-reply@jobs.example.com`. Set `SHARED_SENDING_DOMAIN` to the same verified domain for organisation-branded sending. Without `RESEND_API_KEY`, emails are logged to the development console instead of sent. Configure `RESEND_WEBHOOK_SECRET` to process bounce and complaint events.
+`onboarding@resend.dev` is suitable for local testing and can deliver only to the email address associated with your Resend account. To send verification links, magic links, invitations, and notifications to other recipients, verify a domain in Resend and set `RESEND_FROM_EMAIL` to an address on that domain, such as `no-reply@jobs.example.com`. Set `SHARED_SENDING_DOMAIN` to the same verified domain for organisation-branded sending. Without `RESEND_API_KEY`, emails are logged in development; production rejects delivery. Configure `RESEND_WEBHOOK_SECRET` to process bounce and complaint events.
 
 Email verification and password recovery use the same Resend configuration. Password reset links expire after one hour and revoke the account’s existing sessions after a successful reset.
 
@@ -207,6 +209,9 @@ Set `BETTER_AUTH_SECRET` and `LOCAL_KEK` (both required; generate each with `ope
 
 ## Security posture
 
+- Release blockers and implementation requirements are tracked in [the release-readiness issue](https://github.com/jusso-dev/Recruvault/issues/37), including [mandatory customer encryption-key onboarding](https://github.com/jusso-dev/Recruvault/issues/25). Current encryption uses the server-managed `LOCAL_KEK`; customer-owned keys and zero-knowledge access are not implemented.
+- Uploaded document bytes currently rely on private storage and optional storage-side encryption, rather than application-level document envelopes. Field crypto-shredding does not crypto-shred document bytes; see [document encryption](https://github.com/jusso-dev/Recruvault/issues/27) and [complete erasure](https://github.com/jusso-dev/Recruvault/issues/29).
+- Dependency maintenance and remaining advisories are documented in [SECURITY.md](SECURITY.md).
 - Handling classification: **OFFICIAL: Sensitive at most** — candidate-declared clearance information and career documents only, never classified material.
 - AU data residency by default (ap-southeast-2 for data and keys) when using AWS.
 - Recruvault deliberately does not collect identity documents, right-to-work evidence, or police-check documents.
