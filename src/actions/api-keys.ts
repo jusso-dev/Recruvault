@@ -1,13 +1,26 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, gt } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { apiKeys, candidateApiKeys } from "@/db/schema";
-import { requireCandidate, requireOrgUser, requestMeta } from "@/lib/guards";
+import { getSession, requireCandidate, requireOrgUser, requestMeta } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { generateOpaqueToken, sha256 } from "@/lib/crypto";
 import { API_KEY_PREFIX } from "@/lib/api-auth";
+import {
+  CANDIDATE_API_SCOPES,
+  DEFAULT_KEY_TTL_DAYS,
+  keyExpiry,
+  MAX_ACTIVE_KEYS,
+  ORG_API_SCOPES,
+  parseRequestedScopes,
+  recentAuthentication,
+  type ApiScope,
+} from "@/lib/api-scopes";
+import { activeVault } from "@/lib/vault-store";
+import { readUnlockedCustomerKey } from "@/lib/vault-session";
+import { wrapForCredential } from "@/lib/vault-crypto";
 import type { ActionResult } from "./org";
 
 /**
@@ -21,10 +34,14 @@ export async function createApiKey(
   const ctx = await requireOrgUser("api:manage");
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return { ok: false, error: "Give the key a name." };
+  const issued = await issueKeyMaterial(formData, ORG_API_SCOPES, "organisation", ctx.orgId, ctx.userId);
+  if (!issued.ok) return issued;
 
-  const { token } = generateOpaqueToken();
-  const key = `${API_KEY_PREFIX}${token}`;
-  const prefix = key.slice(0, 11);
+  const active = await db
+    .select({ id: apiKeys.id })
+    .from(apiKeys)
+    .where(and(eq(apiKeys.userId, ctx.userId), eq(apiKeys.orgId, ctx.orgId), isNull(apiKeys.revokedAt), gt(apiKeys.expiresAt, new Date())));
+  if (active.length >= MAX_ACTIVE_KEYS) return { ok: false, error: "Revoke an existing key before creating another." };
 
   const [row] = await db
     .insert(apiKeys)
@@ -32,8 +49,12 @@ export async function createApiKey(
       orgId: ctx.orgId,
       userId: ctx.userId,
       name,
-      keyHash: sha256(key),
-      prefix,
+      keyHash: sha256(issued.key),
+      prefix: issued.key.slice(0, 11),
+      scopes: issued.scopes,
+      expiresAt: issued.expiresAt,
+      vaultKeyId: issued.vaultKeyId,
+      wrappedVaultKey: issued.wrappedVaultKey,
     })
     .returning({ id: apiKeys.id });
 
@@ -49,7 +70,8 @@ export async function createApiKey(
   });
 
   revalidatePath("/dashboard/settings");
-  return { ok: true, id: row.id, key };
+  revalidatePath("/dashboard/integrations");
+  return { ok: true, id: row.id, key: issued.key };
 }
 
 /** Revoke an API key (tenant-scoped). */
@@ -95,17 +117,32 @@ export async function createCandidateApiKey(
   const ctx = await requireCandidate();
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return { ok: false, error: "Give the key a name." };
+  const issued = await issueKeyMaterial(formData, CANDIDATE_API_SCOPES, "candidate", ctx.candidateAccountId, ctx.userId);
+  if (!issued.ok) return issued;
 
-  const { token } = generateOpaqueToken();
-  const key = `${API_KEY_PREFIX}${token}`;
-  const prefix = key.slice(0, 11);
+  const active = await db
+    .select({ id: candidateApiKeys.id })
+    .from(candidateApiKeys)
+    .where(
+      and(
+        eq(candidateApiKeys.candidateAccountId, ctx.candidateAccountId),
+        isNull(candidateApiKeys.revokedAt),
+        gt(candidateApiKeys.expiresAt, new Date()),
+      ),
+    );
+  if (active.length >= MAX_ACTIVE_KEYS) return { ok: false, error: "Revoke an existing key before creating another." };
+
   const [row] = await db
     .insert(candidateApiKeys)
     .values({
       candidateAccountId: ctx.candidateAccountId,
       name,
-      keyHash: sha256(key),
-      prefix,
+      keyHash: sha256(issued.key),
+      prefix: issued.key.slice(0, 11),
+      scopes: issued.scopes,
+      expiresAt: issued.expiresAt,
+      vaultKeyId: issued.vaultKeyId,
+      wrappedVaultKey: issued.wrappedVaultKey,
     })
     .returning({ id: candidateApiKeys.id });
 
@@ -119,7 +156,53 @@ export async function createCandidateApiKey(
     ...meta,
   });
   revalidatePath("/integrations");
-  return { ok: true, id: row.id, key };
+  return { ok: true, id: row.id, key: issued.key };
+}
+
+async function issueKeyMaterial(
+  formData: FormData,
+  allowed: readonly ApiScope[],
+  ownerType: "organisation" | "candidate",
+  ownerId: string,
+  userId: string,
+): Promise<
+  | {
+      ok: true;
+      key: string;
+      scopes: string[];
+      expiresAt: Date;
+      vaultKeyId: string;
+      wrappedVaultKey: string;
+    }
+  | { ok: false; error: string }
+> {
+  const requested = formData.getAll("scopes").map(String);
+  const scopes = parseRequestedScopes(
+    requested.length > 0 ? requested : [...allowed],
+    allowed,
+  );
+  if (!scopes.ok) return scopes;
+  const expiresAt = keyExpiry(Number(formData.get("ttlDays") ?? DEFAULT_KEY_TTL_DAYS));
+  if (!expiresAt) return { ok: false, error: "Choose an expiry between 1 and 365 days." };
+
+  const authSession = await getSession();
+  if (!authSession || authSession.user.id !== userId || !recentAuthentication(authSession.session.createdAt)) {
+    return { ok: false, error: "Sign in again before creating an API key." };
+  }
+  const crk = await readUnlockedCustomerKey(ownerType, ownerId);
+  const vault = await activeVault(ownerType, ownerId);
+  if (!crk || !vault) return { ok: false, error: "Unlock the encryption key before creating an API key." };
+
+  const { token } = generateOpaqueToken();
+  const key = `${API_KEY_PREFIX}${token}`;
+  return {
+    ok: true,
+    key,
+    scopes: scopes.scopes,
+    expiresAt,
+    vaultKeyId: vault.id,
+    wrappedVaultKey: wrapForCredential(key, crk),
+  };
 }
 
 /** Revoke one of the signed-in job seeker's own keys. */

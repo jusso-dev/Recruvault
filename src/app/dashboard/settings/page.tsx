@@ -7,6 +7,8 @@ import { ASSIGNABLE_ROLES, can } from "@/lib/rbac";
 import { domainsEnabled, getSendingDomain } from "@/lib/resend-domains";
 import { ActionForm } from "@/components/action-form";
 import { ApiKeysManager } from "@/components/api-keys-manager";
+import { BackupSettings } from "@/components/backup-settings";
+import { getPublicBackupConfig, listBackupRuns } from "@/lib/backup";
 import {
   Badge,
   Button,
@@ -240,6 +242,20 @@ export default async function SettingsPage() {
           </p>
         </CardContent>
       </Card>
+
+      {ctx.role === "owner" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Nightly encrypted backups</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <BackupSettings
+              config={await getPublicBackupConfig()}
+              runs={await listBackupRuns()}
+            />
+          </CardContent>
+        </Card>
+      )}
 
       {canManageApi && (
         <Card>

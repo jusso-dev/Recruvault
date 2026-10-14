@@ -10,7 +10,7 @@ services:
       args:
         TRUSTED_DOMAINS: ${TRUSTED_DOMAINS:-localhost,192.168.1.19,100.80.178.73}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       TRUSTED_DOMAINS: ${TRUSTED_DOMAINS:-localhost,192.168.1.19,100.80.178.73}
       DATABASE_URL: postgres://recruvault:recruvault@db:5432/recruvault
@@ -70,7 +70,7 @@ services:
     volumes:
       - db-data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U recruvault"]
       interval: 5s
@@ -99,8 +99,8 @@ services:
     volumes:
       - minio-data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
 
   # One-shot: wait for MinIO, then create the documents bucket if missing.
   minio-init:
@@ -129,7 +129,7 @@ services:
     image: inngest/inngest:latest
     command: inngest dev -u http://app:3000/api/inngest --no-discovery
     ports:
-      - "8288:8288"
+      - "127.0.0.1:8288:8288"
     depends_on:
       app:
         condition: service_started

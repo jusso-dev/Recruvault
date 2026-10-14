@@ -11,7 +11,7 @@ const CLEARANCE_LEVELS = new Set(["", "baseline", "nv1", "nv2", "pv", "tspa"]);
 
 export async function GET(req: NextRequest) {
   return handle(async () => {
-    const ctx = await resolveCandidateContext(req);
+    const ctx = await resolveCandidateContext(req, "profile:read");
     const [profile] = await db
       .select({
         discoverable: discoveryProfiles.discoverable,
@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
 /** Update the small, non-document discovery profile. Sensitive identity fields are rejected. */
 export async function PATCH(req: NextRequest) {
   return handle(async () => {
-    const ctx = await resolveCandidateContext(req);
+    const ctx = await resolveCandidateContext(req, "profile:write");
     const body = await req.json().catch(() => {
       throw new ApiError(400, "Invalid JSON body.");
     });

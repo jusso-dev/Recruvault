@@ -17,7 +17,8 @@
     "db:push": "drizzle-kit push",
     "db:seed": "tsx src/db/seed.ts",
     "db:seed-demo": "tsx src/db/seed-demo.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:deploy-env": "tsx scripts/check-deploy-env.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1080.0",

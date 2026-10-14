@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { walletDocuments } from "@/db/schema";
 import { requireCandidate, requestMeta, AuthError } from "@/lib/guards";
-import { getObjectStream } from "@/lib/storage";
+import { readProtectedDocument } from "@/lib/document-protect";
 import { audit } from "@/lib/audit";
 import { CAREER_DOCUMENT_KINDS } from "@/lib/fields";
 
@@ -44,11 +44,23 @@ export async function GET(
     ...meta,
   });
 
-  const obj = await getObjectStream(doc.storageKey);
-  return new NextResponse(obj.body as unknown as ReadableStream, {
+  let body: Buffer;
+  try {
+    body = (
+      await readProtectedDocument({
+        ...doc,
+        ownerType: "candidate",
+        ownerId: doc.candidateAccountId,
+      })
+    ).bytes;
+  } catch {
+    return NextResponse.json({ error: "Unlock the encryption key to view this document." }, { status: 409 });
+  }
+  const safeName = doc.fileName.replace(/[\r\n"]/g, "");
+  return new NextResponse(body as unknown as BodyInit, {
     headers: {
-      "Content-Type": doc.contentType,
-      "Content-Disposition": `inline; filename="${doc.fileName}"`,
+      "Content-Type": doc.originalContentType || doc.contentType,
+      "Content-Disposition": `inline; filename="${safeName}"`,
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "default-src 'none'; object-src 'none'; frame-ancestors 'self'",

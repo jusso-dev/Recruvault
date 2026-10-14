@@ -8,7 +8,7 @@ import { createRequestCore } from "@/lib/requests-service";
 
 export async function GET(req: NextRequest) {
   return handle(async () => {
-    const ctx = await resolveOrgContext(req, "requests:create");
+    const ctx = await resolveOrgContext(req, "requests:create", "roles:read");
     const rows = await db
       .select({
         id: requests.id,
@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   return handle(async () => {
-    const ctx = await resolveOrgContext(req, "requests:create");
+    const ctx = await resolveOrgContext(req, "requests:create", "roles:write");
     const body = await req.json().catch(() => {
       throw new ApiError(400, "Invalid JSON body.");
     });

@@ -50,7 +50,7 @@ function groupByStatus<T extends { status: string }>(rows: T[]): Record<string, 
 
 export async function GET(req: NextRequest) {
   return handle(async () => {
-    const ctx = await resolveOrgContext(req, "requests:create");
+    const ctx = await resolveOrgContext(req, "requests:create", "reports:read");
     const now = new Date();
     const previousMonthStart = startOfPreviousCalendarMonth(now);
     const currentMonthStart = startOfCurrentCalendarMonth(now);

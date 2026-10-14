@@ -11,7 +11,7 @@ export function buildOpenApiSpec() {
       title: "Recruvault API",
       version: "1.0.0",
       description:
-        "Programmatic access for recruiters and job seekers. Organisation keys manage roles and candidate workflows; job-seeker keys access only the owner's applications, career-document metadata, and discovery profile. Authenticate with a Recruvault API key as a Bearer token.",
+        "Programmatic access for recruiters and job seekers. Keys are bearer tokens with explicit scopes and an expiry. A key cannot exceed the caller's live role, and a locked vault cannot be bypassed. Organisation keys manage roles and candidate workflows; job-seeker keys access only the owner's applications, career-document metadata, and discovery profile.",
     },
     servers: [{ url: `${appUrl}/api/v1` }],
     tags: [

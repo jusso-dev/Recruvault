@@ -11,7 +11,20 @@ export async function register() {
 
   if (process.env.SENTRY_DSN) {
     const Sentry = await import("@sentry/nextjs");
-    Sentry.init({ dsn: process.env.SENTRY_DSN, tracesSampleRate: 0 });
+    const { sanitizeForTelemetry } = await import("@/lib/redact");
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      tracesSampleRate: 0,
+      sendDefaultPii: false,
+      beforeSend(event) {
+        if (event.request) {
+          delete event.request.cookies;
+          delete event.request.data;
+          event.request.headers = {};
+        }
+        return sanitizeForTelemetry(event) as typeof event;
+      },
+    });
   }
 }
 

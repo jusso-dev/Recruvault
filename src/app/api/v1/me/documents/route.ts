@@ -9,7 +9,7 @@ import { WALLET_DOCUMENT_TYPES } from "@/lib/fields";
 /** List career-document metadata. File contents remain behind audited browser routes. */
 export async function GET(req: NextRequest) {
   return handle(async () => {
-    const ctx = await resolveCandidateContext(req);
+    const ctx = await resolveCandidateContext(req, "documents:read");
     const allowedKinds = WALLET_DOCUMENT_TYPES.map((type) => type.type);
     const rows = await db
       .select({

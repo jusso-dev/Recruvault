@@ -11,7 +11,7 @@ import {
 import { audit } from "@/lib/audit";
 import { requireCandidate, requireOrgUser, requestMeta } from "@/lib/guards";
 import { EMPLOYMENT_TYPES, WORK_ARRANGEMENTS } from "@/lib/role-metadata";
-import { sendEvent, sendEvents } from "@/inngest/client";
+import { emitEvent } from "@/lib/outbox";
 import type { ActionResult } from "@/actions/org";
 
 function commaList(value: FormDataEntryValue | null, limit: number) {
@@ -70,7 +70,14 @@ export async function updateRecruiterMatchSettings(
         ),
       );
     if (listedRoles.length > 0) {
-      await sendEvents("job-alert/role-listed", listedRoles);
+      for (const role of listedRoles) {
+        await emitEvent(
+          "job-alert/role-listed",
+          { requestId: role.requestId },
+          `job-alert/role-listed:${role.requestId}`,
+          ctx.orgId,
+        );
+      }
     }
   }
 
@@ -140,9 +147,12 @@ export async function updateJobAlertSubscription(formData: FormData): Promise<Ac
   });
 
   if (enabled) {
-    await sendEvent("job-alert/subscription-updated", {
-      candidateAccountId: ctx.candidateAccountId,
-    });
+    await emitEvent(
+      "job-alert/subscription-updated",
+      { candidateAccountId: ctx.candidateAccountId },
+      `job-alert/subscription-updated:${ctx.candidateAccountId}:${Date.now()}`,
+      ctx.candidateAccountId,
+    );
   }
 
   revalidatePath("/roles");

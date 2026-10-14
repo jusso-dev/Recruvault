@@ -1,10 +1,10 @@
 "use server";
 
 import { createHash } from "crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { memberships, organisations, user } from "@/db/schema";
+import { apiKeys, memberships, organisations, user } from "@/db/schema";
 import { requireOrgUser, getSession, requestMeta } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { ASSIGNABLE_ROLES, type OrgRole } from "@/lib/rbac";
@@ -15,6 +15,9 @@ import {
   verifySendingDomain,
 } from "@/lib/resend-domains";
 import { getLogger } from "@/lib/logger";
+import { readEnrollmentKey } from "@/lib/vault-enrollment";
+import { insertVaultKey } from "@/lib/vault-store";
+import { establishVaultUnlock } from "@/lib/vault-session";
 
 const log = getLogger("org");
 
@@ -39,6 +42,8 @@ export async function createOrganisation(formData: FormData): Promise<ActionResu
 
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return { ok: false, error: "Organisation name is required." };
+  const material = readEnrollmentKey(formData);
+  if (!material.ok) return { ok: false, error: material.error };
 
   const [existing] = await db
     .select()
@@ -46,15 +51,32 @@ export async function createOrganisation(formData: FormData): Promise<ActionResu
     .where(eq(memberships.userId, session.user.id));
   if (existing) return { ok: false, error: "You already belong to an organisation." };
 
-  const [org] = await db
-    .insert(organisations)
-    .values({ name, slug: slugify(name) })
-    .returning();
+  const [org] = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(organisations)
+      .values({ name, slug: slugify(name) })
+      .returning();
+    await tx.insert(memberships).values({
+      orgId: created.id,
+      userId: session.user.id,
+      role: "owner",
+    });
+    const vault = await insertVaultKey(tx, {
+      ownerType: "organisation",
+      ownerId: created.id,
+      crk: material.material.crk,
+      kdf: material.material.kdf,
+      kdfSalt: material.material.kdfSalt,
+      kdfParams: material.material.kdfParams,
+    });
+    return [{ ...created, vaultKeyId: vault.id }];
+  });
 
-  await db.insert(memberships).values({
-    orgId: org.id,
-    userId: session.user.id,
-    role: "owner",
+  await establishVaultUnlock({
+    vaultKeyId: org.vaultKeyId,
+    crk: material.material.crk,
+    sessionId: session.session.id,
+    expiresAt: session.session.expiresAt,
   });
 
   const meta = await requestMeta();
@@ -163,6 +185,10 @@ export async function removeMember(formData: FormData): Promise<ActionResult> {
   if (m.role === "owner") return { ok: false, error: "The owner cannot be removed." };
 
   await db.delete(memberships).where(eq(memberships.id, membershipId));
+  await db
+    .update(apiKeys)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(apiKeys.orgId, ctx.orgId), eq(apiKeys.userId, m.userId), isNull(apiKeys.revokedAt)));
 
   const meta = await requestMeta();
   await audit({

@@ -7,14 +7,16 @@ import { resolveOrgContext } from "@/lib/api-auth";
 import { ApiError, handle, json } from "@/lib/api/http";
 import { JD_ALLOWED_TYPES, UPLOAD_MAX_BYTES } from "@/lib/fields";
 import { sniffContentType } from "@/lib/scan";
-import { newStorageKey, putObjectBytes } from "@/lib/storage";
-import { sendEvent } from "@/inngest/client";
+import { emitEvent } from "@/lib/outbox";
+import { activeVault } from "@/lib/vault-store";
+import { protectDocument, putProtectedObject } from "@/lib/document-protect";
 import { audit } from "@/lib/audit";
+import { AuthError } from "@/lib/guards";
 
 /** Upload (or replace) a request's job description. Accepts PDF or Word (.docx). */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
-    const ctx = await resolveOrgContext(req, "requests:create");
+    const ctx = await resolveOrgContext(req, "requests:create", "jd:write");
     const { id } = await params;
 
     const [request] = await db
@@ -36,23 +38,45 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       throw new ApiError(400, "The JD must be a PDF or Word (.docx) document.");
     }
 
-    const storageKey = newStorageKey("org", ctx.orgId, jd.name);
-    await putObjectBytes(storageKey, bytes, sniffed);
+    const vault = await activeVault("organisation", ctx.orgId);
+    if (!vault) throw new AuthError("Encryption enrollment is required.");
+    const prepared = await protectDocument({
+      executor: db,
+      bytes,
+      ownerType: "organisation",
+      ownerId: ctx.orgId,
+      purpose: "jd",
+      keyVersion: vault.version,
+      recipientPublicKey: vault.publicKey,
+      scope: "org",
+    });
+    if (!prepared.ok) throw new ApiError(400, prepared.error);
+    await putProtectedObject(prepared.storageKey, prepared.ciphertext);
     const [doc] = await db
       .insert(documents)
       .values({
+        id: prepared.documentId,
         orgId: ctx.orgId,
         kind: "jd",
         fileName: jd.name,
-        contentType: sniffed,
+        contentType: "application/octet-stream",
+        originalContentType: sniffed,
         sizeBytes: jd.size,
-        storageKey,
+        storageKey: prepared.storageKey,
         checksum: createHash("sha256").update(bytes).digest("hex"),
+        dekId: prepared.dekId,
+        envelopeVersion: 1,
+        scanStatus: "clean",
       })
       .returning({ id: documents.id });
 
     await db.update(requests).set({ jdDocumentId: doc.id }).where(eq(requests.id, id));
-    await sendEvent("document/uploaded", { documentId: doc.id, table: "documents" });
+    await emitEvent(
+      "document/uploaded",
+      { documentId: doc.id, table: "documents" },
+      `document/uploaded:documents:${doc.id}`,
+      ctx.orgId,
+    );
     await audit({
       orgId: ctx.orgId,
       actorType: "org_user",

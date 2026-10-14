@@ -11,8 +11,16 @@ export default async function SeekerLayout({
   try {
     ctx = await requireCandidate();
   } catch (err) {
+    if (err instanceof AuthError && err.message.includes("deleted")) redirect("/account-deleted");
     if (err instanceof AuthError) redirect("/sign-in");
     throw err;
+  }
+
+  const { activeVault } = await import("@/lib/vault-store");
+  const { readUnlockedCustomerKey } = await import("@/lib/vault-session");
+  if (!(await activeVault("candidate", ctx.candidateAccountId))) redirect("/vault/enroll");
+  if (!(await readUnlockedCustomerKey("candidate", ctx.candidateAccountId))) {
+    redirect("/vault/unlock?next=/overview");
   }
 
   const nav: AppNavItem[] = [

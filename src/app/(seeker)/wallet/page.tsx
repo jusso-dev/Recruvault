@@ -222,9 +222,10 @@ export default async function WalletPage() {
         </CardHeader>
         <CardContent>
           <p className="mb-3 text-sm text-stone-600">
-            Erase your wallet, documents, and submissions. Deletion is a crypto-shred,
-            the encryption keys are destroyed and the data is unrecoverable. Type{" "}
-            <strong>DELETE</strong> to confirm.
+            This deletes the career record: credentials, documents, applications, sessions,
+            and API keys. Encryption keys for that record are destroyed. Signing in again
+            does not recreate it. Backups made before deletion can still contain ciphertext
+            until they expire. Type <strong>DELETE</strong> to confirm.
           </p>
           <ActionForm
             action={requestErasure}

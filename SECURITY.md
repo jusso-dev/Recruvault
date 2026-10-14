@@ -4,8 +4,7 @@ Recruvault handles candidate career documents and self-declared clearance
 information. It must not collect classified material, identity documents,
 right-to-work evidence, or police-check documents. The
 [release checklist](https://github.com/jusso-dev/Recruvault/issues/37) records
-security requirements that are still open. Current server-side encryption is
-not a zero-knowledge or customer-key system.
+security requirements that are still open. Customer keys are enrolled per organisation and job seeker. The server can unwrap a key while that session or API credential is unlocked. A database copy without the unlock secret does not reveal new envelopes. Legacy rows and secure-link render delegation still depend on `LOCAL_KEK`. Details and the restore procedure are in [docs/encryption.md](docs/encryption.md) and [docs/operations.md](docs/operations.md).
 
 ## Dependency updates
 

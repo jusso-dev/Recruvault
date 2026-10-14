@@ -11,6 +11,7 @@ import {
 import { Button, Input } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { userFacingError } from "@/lib/user-facing-errors";
+import { CANDIDATE_API_SCOPES, ORG_API_SCOPES } from "@/lib/api-scopes";
 
 export interface ApiKeyRow {
   id: string;
@@ -119,20 +120,36 @@ export function ApiKeysManager({
         </ul>
       )}
 
-      <form onSubmit={onCreate} className="flex items-end gap-2">
-        <div className="flex-1">
+      <form onSubmit={onCreate} className="space-y-3">
+        <div>
           <label htmlFor="apiKeyName" className="mb-1.5 block text-sm font-medium text-stone-700">
             New key name
           </label>
           <Input id="apiKeyName" name="name" placeholder="Codex on my laptop" required />
+        </div>
+        <fieldset className="space-y-1">
+          <legend className="text-sm font-medium text-stone-700">Scopes</legend>
+          {(scope === "candidate" ? CANDIDATE_API_SCOPES : ORG_API_SCOPES).map((item) => (
+            <label key={item} className="flex items-center gap-2 text-sm text-stone-700">
+              <input type="checkbox" name="scopes" value={item} defaultChecked />
+              {item}
+            </label>
+          ))}
+        </fieldset>
+        <div>
+          <label htmlFor="ttlDays" className="mb-1.5 block text-sm font-medium text-stone-700">
+            Expires in days
+          </label>
+          <Input id="ttlDays" name="ttlDays" type="number" min={1} max={365} defaultValue={90} required />
         </div>
         <Button type="submit" disabled={pending}>
           Create key
         </Button>
       </form>
       <p className="text-xs text-stone-500">
-        Keys authenticate the REST API and MCP server. They are limited to your
-        {scope === "candidate" ? " job-seeker account" : " organisation role"}; treat them like a password.
+        Keys expire, carry only the scopes you leave checked, and cannot exceed your live role.
+        Sign in again if this session is older than 12 hours, and unlock the encryption key first.
+        The secret is shown once. Treat it like a password.
       </p>
     </div>
   );

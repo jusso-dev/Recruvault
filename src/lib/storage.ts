@@ -5,6 +5,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import type { Readable } from "stream";
 
@@ -38,6 +39,11 @@ function client() {
 export function newStorageKey(scope: "org" | "wallet", ownerId: string, fileName: string) {
   const safe = fileName.replace(/[^\w.-]+/g, "_").slice(-80);
   return `${scope}/${ownerId}/${randomUUID()}/${safe}`;
+}
+
+/** Opaque object name. The original filename stays in the database, not the object key. */
+export function opaqueStorageKey(scope: "org" | "wallet", ownerId: string) {
+  return `${scope}/${ownerId}/${randomUUID()}`;
 }
 
 /** Server-side upload (small files pass through the app server). */
@@ -81,6 +87,24 @@ export async function getObjectBytes(storageKey: string): Promise<Buffer> {
     new GetObjectCommand({ Bucket: BUCKET, Key: storageKey }),
   );
   return Buffer.from(await out.Body!.transformToByteArray());
+}
+
+export async function listObjectKeys(): Promise<string[]> {
+  const keys: string[] = [];
+  let token: string | undefined;
+  do {
+    const out = await client().send(
+      new ListObjectsV2Command({
+        Bucket: BUCKET,
+        ContinuationToken: token,
+      }),
+    );
+    for (const item of out.Contents ?? []) {
+      if (item.Key) keys.push(item.Key);
+    }
+    token = out.IsTruncated ? out.NextContinuationToken : undefined;
+  } while (token);
+  return keys;
 }
 
 export async function deleteObject(storageKey: string): Promise<void> {

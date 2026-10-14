@@ -11,7 +11,7 @@ import {
 } from "@/db/schema";
 import { requireOrgUser, requestMeta, AuthError } from "@/lib/guards";
 import { readLinkSession } from "@/lib/link-session";
-import { getObjectStream, getObjectBytes } from "@/lib/storage";
+import { readProtectedDocument } from "@/lib/document-protect";
 import { audit } from "@/lib/audit";
 import { can } from "@/lib/rbac";
 import { watermarkPdf } from "@/lib/watermark";
@@ -41,6 +41,7 @@ export async function GET(
 
   let authorised = false;
   let allowDownload = false;
+  let renderDelegation = false;
   // Identity burned into the watermark on view-only renders, for traceability.
   let viewerLabel = "";
 
@@ -102,6 +103,7 @@ export async function GET(
         const isNda = request?.ndaDocumentId === doc.id;
         if (request && (isJd || isNda)) {
           authorised = true;
+          renderDelegation = true;
           viewerLabel = at.recipientEmail;
           // NDA and JD have independent view modes.
           const viewMode = isNda ? request.ndaViewMode : request.jdViewMode;
@@ -130,6 +132,7 @@ export async function GET(
             );
           if (own) {
             authorised = true;
+            renderDelegation = true;
             viewerLabel = at.recipientEmail;
           }
         }
@@ -153,9 +156,33 @@ export async function GET(
   // View-only render: burn a per-viewer watermark into the PDF so the served
   // bytes can't yield a clean copy. A permitted download serves the original
   // (the sanctioned clean copy). Non-PDFs stream as-is.
-  const isPdf = doc.contentType === "application/pdf";
+  const mediaType = doc.originalContentType || doc.contentType;
+  const isPdf = mediaType === "application/pdf";
+  let plaintext: Buffer | null = null;
+  const loadPlaintext = async () => {
+    if (!plaintext) {
+      try {
+        plaintext = (
+          await readProtectedDocument(
+            {
+              ...doc,
+              ownerType: "organisation",
+              ownerId: doc.orgId ?? "",
+            },
+            { renderDelegation },
+          )
+        ).bytes;
+      } catch {
+        plaintext = Buffer.alloc(0);
+      }
+    }
+    return plaintext;
+  };
   if (!wantsDownload && doc.watermarkRequired && isPdf) {
-    const original = await getObjectBytes(doc.storageKey);
+    const original = await loadPlaintext();
+    if (original.length === 0) {
+      return NextResponse.json({ error: "Unlock the encryption key to view this document." }, { status: 409 });
+    }
     const label = `Recruvault · ${viewerLabel || "authorised viewer"} · ${new Date().toISOString()} · Confidential`;
     const stamped = await watermarkPdf(original, label);
     return new NextResponse(stamped as unknown as BodyInit, {
@@ -167,19 +194,20 @@ export async function GET(
     });
   }
 
-  const obj = await getObjectStream(doc.storageKey);
-  // Only PDFs can be watermarked and rendered view-only in the browser. Any
-  // other type (e.g. a Word JD) is served as a download, never inline, so an
-  // un-watermarked original is not presented as if it were view-only.
+  const body = await loadPlaintext();
+  if (body.length === 0) {
+    return NextResponse.json({ error: "Unlock the encryption key to view this document." }, { status: 409 });
+  }
+  const safeName = doc.fileName.replace(/[\r\n"]/g, "");
   const disposition =
     wantsDownload || !isPdf
-      ? `attachment; filename="${doc.fileName}"`
-      : `inline; filename="${doc.fileName}"`;
+      ? `attachment; filename="${safeName}"`
+      : `inline; filename="${safeName}"`;
 
-  return new NextResponse(obj.body as unknown as ReadableStream, {
+  return new NextResponse(body as unknown as BodyInit, {
     headers: {
       ...commonHeaders,
-      "Content-Type": doc.contentType,
+      "Content-Type": mediaType,
       "Content-Disposition": disposition,
     },
   });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sendEvent } from "@/inngest/client";
+import { emitEvent } from "@/lib/outbox";
 import { verifySvixSignature } from "@/lib/svix";
 
 /**
@@ -32,11 +32,11 @@ export async function POST(req: NextRequest) {
 
   const to = Array.isArray(body.data?.to) ? body.data?.to[0] : body.data?.to;
   if (to) {
-    await sendEvent("email/event", {
-      type: body.type,
-      email: to,
-      messageId: body.data?.email_id,
-    });
+    await emitEvent(
+      "email/event",
+      { type: body.type, email: to, messageId: body.data?.email_id },
+      `email/event:${body.data?.email_id ?? "none"}:${body.type}`,
+    );
   }
 
   return NextResponse.json({ ok: true });

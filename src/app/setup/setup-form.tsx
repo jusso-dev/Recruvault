@@ -9,8 +9,17 @@ import { useToast } from "@/components/toast";
 import { userFacingError } from "@/lib/user-facing-errors";
 import { Button, Card, CardContent, Input, Label } from "@/components/ui";
 import { BrandMark } from "@/components/brand-mark";
+import { VaultKeyFields } from "@/components/vault-key-fields";
 
-export function SetupForm() {
+export function SetupForm({
+  signedIn = false,
+  emailVerified = false,
+  email,
+}: {
+  signedIn?: boolean;
+  emailVerified?: boolean;
+  email?: string;
+}) {
   const router = useRouter();
   const { showToast } = useToast();
   const [busy, setBusy] = useState(false);
@@ -21,7 +30,7 @@ export function SetupForm() {
     const data = new FormData(form);
     const password = String(data.get("password") ?? "");
     const confirmPassword = String(data.get("confirmPassword") ?? "");
-    if (password !== confirmPassword) {
+    if (!signedIn && password !== confirmPassword) {
       showToast({ tone: "error", message: "The passwords do not match. Enter them again." });
       form.querySelector<HTMLInputElement>("#confirmPassword")?.focus();
       return;
@@ -29,20 +38,22 @@ export function SetupForm() {
 
     setBusy(true);
     try {
-      const firstName = String(data.get("firstName") ?? "").trim();
-      const lastName = String(data.get("lastName") ?? "").trim();
-      const { error } = await authClient.signUp.email({
-        name: `${firstName} ${lastName}`,
-        email: String(data.get("email") ?? "").trim(),
-        password,
-        accountType: "org",
-      });
-      if (error) {
-        showToast({
-          tone: "error",
-          message: userFacingError(error, "We couldn’t create the owner account. Check your details and try again."),
+      if (!signedIn) {
+        const firstName = String(data.get("firstName") ?? "").trim();
+        const lastName = String(data.get("lastName") ?? "").trim();
+        const { error } = await authClient.signUp.email({
+          name: `${firstName} ${lastName}`,
+          email: String(data.get("email") ?? "").trim(),
+          password,
+          accountType: "org",
         });
-        return;
+        if (error) {
+          showToast({
+            tone: "error",
+            message: userFacingError(error, "We couldn’t create the owner account. Check your details and try again."),
+          });
+          return;
+        }
       }
 
       const result = await completePlatformSetup(data);
@@ -110,6 +121,12 @@ export function SetupForm() {
               />
             </div>
           </div>
+          <div>
+            <Label htmlFor="bootstrapToken">Bootstrap token</Label>
+            <Input id="bootstrapToken" name="bootstrapToken" type="password" required autoComplete="off" />
+          </div>
+          <VaultKeyFields />
+          {!signedIn && (
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <Label htmlFor="password">Password</Label>
@@ -134,6 +151,10 @@ export function SetupForm() {
               />
             </div>
           </div>
+          )}
+          {signedIn && !emailVerified && (
+            <p className="text-sm text-stone-600">Verify {email} before setup can finish. Open the email, then return here.</p>
+          )}
           <Button type="submit" className="w-full" disabled={busy}>
             {busy ? "Setting up workspace…" : "Create owner and organisation"}
           </Button>

@@ -7,7 +7,7 @@ import { ApiError, handle, json } from "@/lib/api/http";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
-    const ctx = await resolveOrgContext(req, "requests:create");
+    const ctx = await resolveOrgContext(req, "requests:create", "roles:read");
     const { id } = await params;
     const [request] = await db
       .select({

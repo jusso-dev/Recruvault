@@ -1,0 +1,45 @@
+# Production override. Use with the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+#
+# This file removes development port publishing, the Inngest dev server, and
+# default database or object-storage passwords. Supply every secret at runtime.
+# Do not put those values in the Compose file or the image.
+
+services:
+  app:
+    ports: !override
+      - "127.0.0.1:3000:3000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      APP_URL: ${APP_URL:?set APP_URL}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
+      LOCAL_KEK: ${LOCAL_KEK:?set LOCAL_KEK}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?set BOOTSTRAP_TOKEN}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY}
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+      INNGEST_DEV: ""
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?set INNGEST_EVENT_KEY}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?set INNGEST_SIGNING_KEY}
+      ALLOW_RECRUITER_SIGNUP: "false"
+
+  db:
+    ports: !override []
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+
+  minio:
+    ports: !override []
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY}
+
+  minio-init:
+    environment:
+      MINIO_USER: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID}
+      MINIO_PASS: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY}
+
+  inngest:
+    profiles: ["never"]

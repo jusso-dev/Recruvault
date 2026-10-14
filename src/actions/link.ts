@@ -25,15 +25,18 @@ import {
   generateOtp,
   getDataKey,
   sha256,
+  shredDataKey,
 } from "@/lib/crypto";
-import { issueLinkSession, readLinkSession, clearLinkSession } from "@/lib/link-session";
+import { issueLinkSession, readLinkSession, readLinkSessionSecret, clearLinkSession } from "@/lib/link-session";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getLogger } from "@/lib/logger";
 import { sendOtpEmail, sendSubmissionReceived } from "@/lib/email";
 import { audit } from "@/lib/audit";
 import { getSession, requestMeta } from "@/lib/guards";
-import { sendEvent } from "@/inngest/client";
-import { newStorageKey, putObjectBytes, deleteObject } from "@/lib/storage";
+import { enqueueEvent, publishPendingOutbox } from "@/lib/outbox";
+import { activeVault } from "@/lib/vault-store";
+import { protectDocument, putProtectedObject } from "@/lib/document-protect";
+import { deleteObject } from "@/lib/storage";
 import { sniffContentType } from "@/lib/scan";
 import { allowedTypesForField, UPLOAD_MAX_BYTES } from "@/lib/fields";
 import type { ActionResult } from "./org";
@@ -238,6 +241,8 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
     size: number;
     checksum: string;
     storageKey: string;
+    documentId?: string;
+    dekId?: string;
   }[] = [];
   const preparedValues: { fieldId: string; raw: string }[] = [];
 
@@ -267,7 +272,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
         fileName: file.name,
         size: file.size,
         checksum: createHash("sha256").update(bytes).digest("hex"),
-        storageKey: newStorageKey("org", request.orgId, file.name),
+        storageKey: "",
       });
     } else {
       const raw = String(formData.get(`field_${f.id}`) ?? "").trim();
@@ -311,12 +316,40 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
     }
   }
 
-  // --- Phase 2: upload objects to S3 (external, pre-transaction). ---
+  const vault = await activeVault("organisation", request.orgId);
+  if (!vault) {
+    return { ok: false, error: "This organisation has not finished encryption setup." };
+  }
+
+  // --- Phase 2: scan, encrypt, then upload ciphertext (external, pre-transaction). ---
   const uploadedKeys: string[] = [];
+  const uploadedDekIds: string[] = [];
   try {
     for (const u of preparedUploads) {
-      await putObjectBytes(u.storageKey, u.bytes, u.contentType);
-      uploadedKeys.push(u.storageKey);
+      const prepared = await protectDocument({
+        executor: db,
+        bytes: u.bytes,
+        ownerType: "organisation",
+        ownerId: request.orgId,
+        purpose: "evidence",
+        keyVersion: vault.version,
+        recipientPublicKey: vault.publicKey,
+        scope: "org",
+      });
+      if (!prepared.ok) {
+        await cleanupObjects(uploadedKeys);
+        for (const dekId of uploadedDekIds) await shredDataKey(dekId);
+        return prepared;
+      }
+      await putProtectedObject(prepared.storageKey, prepared.ciphertext);
+      u.storageKey = prepared.storageKey;
+      u.bytes = prepared.ciphertext;
+      Object.assign(u, {
+        documentId: prepared.documentId,
+        dekId: prepared.dekId,
+      });
+      uploadedKeys.push(prepared.storageKey);
+      uploadedDekIds.push(prepared.dekId);
     }
 
     // --- Phase 3: one transaction — either the whole submission lands or none. ---
@@ -348,8 +381,16 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
         })
         .returning({ id: submissions.id });
 
-      // One DEK per submission: shredding it renders every field unrecoverable.
-      const { dekId, dek } = await createDataKey(tx);
+      // One DEK per submission, sealed to the organisation. Shredding it renders
+      // every field unrecoverable without falling back to the deployment key.
+      const { dekId, dek } = await createDataKey(tx, {
+        mode: "sealed",
+        recipientPublicKey: vault.publicKey,
+        ownerType: "organisation",
+        ownerId: request.orgId,
+        purpose: "submission",
+        keyVersion: vault.version,
+      });
 
       if (preparedValues.length > 0) {
         const rows = await Promise.all(
@@ -368,13 +409,18 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
         const [doc] = await tx
           .insert(documents)
           .values({
+            id: u.documentId,
             orgId: request.orgId,
             kind: "evidence",
             fileName: u.fileName,
-            contentType: u.contentType,
+            contentType: "application/octet-stream",
+            originalContentType: u.contentType,
             sizeBytes: u.size,
             storageKey: u.storageKey,
             checksum: u.checksum,
+            dekId: u.dekId,
+            envelopeVersion: 1,
+            scanStatus: "clean",
           })
           .returning({ id: documents.id });
         await tx.insert(submissionDocuments).values({
@@ -420,6 +466,23 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
         .set({ status: "submitted", updatedAt: new Date() })
         .where(eq(deliveries.accessTokenId, at.id));
 
+      for (const documentId of documentIds) {
+        await enqueueEvent(
+          tx,
+          "document/uploaded",
+          { documentId, table: "documents" },
+          `document/uploaded:documents:${documentId}`,
+          request.orgId,
+        );
+      }
+      await enqueueEvent(
+        tx,
+        "submission/received",
+        { submissionId: submission.id },
+        `submission/received:${submission.id}`,
+        request.orgId,
+      );
+
       return { alreadyDone: false as const, submissionId: submission.id, documentIds };
     });
 
@@ -427,6 +490,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
       // Objects were uploaded for a submission that another request already
       // completed; clean them up.
       await cleanupObjects(uploadedKeys);
+      for (const dekId of uploadedDekIds) await shredDataKey(dekId);
       return { ok: false, error: "This request has already been completed." };
     }
 
@@ -441,10 +505,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
       ...meta,
     });
 
-    for (const documentId of result.documentIds) {
-      await sendEvent("document/uploaded", { documentId, table: "documents" });
-    }
-    await sendEvent("submission/received", { submissionId: result.submissionId });
+    await publishPendingOutbox();
 
     const [org] = await db
       .select()
@@ -462,6 +523,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
   } catch (err) {
     // Compensation: the transaction rolled back, so remove any uploaded objects.
     await cleanupObjects(uploadedKeys);
+    for (const dekId of uploadedDekIds) await shredDataKey(dekId);
     log.error({ err, accessTokenId: at.id }, "submitResponse failed");
     return { ok: false, error: "Something went wrong saving your response. Please try again." };
   }
@@ -537,12 +599,10 @@ export async function saveDraft(formData: FormData): Promise<ActionResult> {
           .from(submissionValues)
           .where(eq(submissionValues.submissionId, submissionId))
           .limit(1);
-        if (prior) {
-          dekId = prior.dekId;
-          dek = await getDataKey(dekId);
-        } else {
-          ({ dek, dekId } = await createDataKey(tx));
-        }
+        if (prior) await shredDataKey(prior.dekId, tx);
+        const linkSecret = await readLinkSessionSecret();
+        if (!linkSecret) throw new Error("Secure session expired.");
+        ({ dek, dekId } = await createDataKey(tx, { mode: "link", linkSecret, purpose: "draft" }));
         await tx.delete(submissionValues).where(eq(submissionValues.submissionId, submissionId));
         await tx
           .update(submissions)
@@ -560,7 +620,9 @@ export async function saveDraft(formData: FormData): Promise<ActionResult> {
           })
           .returning({ id: submissions.id });
         submissionId = ins.id;
-        ({ dek, dekId } = await createDataKey(tx));
+        const linkSecret = await readLinkSessionSecret();
+        if (!linkSecret) throw new Error("Secure session expired.");
+        ({ dek, dekId } = await createDataKey(tx, { mode: "link", linkSecret, purpose: "draft" }));
       }
 
       if (values.length > 0) {
@@ -596,11 +658,12 @@ export async function loadDraftValues(accessTokenId: string): Promise<Record<str
     .where(eq(submissionValues.submissionId, draft.id));
 
   const out: Record<string, string> = {};
+  const linkSecret = await readLinkSessionSecret();
   const keyCache = new Map<string, Promise<Buffer>>();
   for (const v of vals) {
     let p = keyCache.get(v.dekId);
     if (!p) {
-      p = getDataKey(v.dekId);
+      p = getDataKey(v.dekId, linkSecret ? { linkSecret } : undefined);
       keyCache.set(v.dekId, p);
     }
     out[v.fieldId] = decryptFieldWithKey(v.valueEncrypted, await p);

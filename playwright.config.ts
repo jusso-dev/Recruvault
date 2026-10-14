@@ -47,6 +47,7 @@ export default defineConfig({
         RESEND_API_KEY: "",
         SCAN_DISABLED: "true",
         PLAYWRIGHT_TEST: "1",
+        BOOTSTRAP_TOKEN: "e2e-bootstrap-token-not-for-production",
       },
       stdout: "pipe",
       stderr: "pipe",

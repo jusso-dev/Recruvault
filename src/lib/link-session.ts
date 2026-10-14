@@ -38,6 +38,14 @@ export async function issueLinkSession(accessTokenId: string): Promise<void> {
   });
 }
 
+/** Raw cookie used to wrap in-progress drafts. Null when the session is missing or expired. */
+export async function readLinkSessionSecret(): Promise<string | null> {
+  const tokenId = await readLinkSession();
+  if (!tokenId) return null;
+  const jar = await cookies();
+  return jar.get(COOKIE)?.value ?? null;
+}
+
 /** Returns the verified access token id, or null. */
 export async function readLinkSession(): Promise<string | null> {
   const jar = await cookies();

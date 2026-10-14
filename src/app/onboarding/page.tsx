@@ -6,6 +6,7 @@ import { getSession } from "@/lib/guards";
 import { createOrganisation } from "@/actions/org";
 import { ActionForm } from "@/components/action-form";
 import { Button, Card, CardContent, Input, Label } from "@/components/ui";
+import { VaultKeyFields } from "@/components/vault-key-fields";
 
 export default async function OnboardingPage() {
   const session = await getSession();
@@ -37,6 +38,7 @@ export default async function OnboardingPage() {
               <Label htmlFor="name">Organisation name</Label>
               <Input id="name" name="name" required placeholder="Acme Talent Pty Ltd" />
             </div>
+            <VaultKeyFields />
             <Button type="submit" className="w-full">
               Create organisation
             </Button>

@@ -27,6 +27,9 @@ export const user = pgTable("user", {
   // "org" (recruiter-side) or "seeker" (job seeker). Job seekers are never
   // members of a recruiter tenant.
   accountType: text("account_type").notNull().default("seeker"),
+  // Set when a job seeker completes account erasure. The identity row stays so
+  // the same login cannot silently recreate a candidate record.
+  erasedAt: timestamp("erased_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -178,9 +181,20 @@ export const consentType = pgEnum("consent_type", ["collection", "nda"]);
 
 export const dataKeys = pgTable("data_keys", {
   id: uuid("id").primaryKey().defaultRandom(),
-  // Base64 DEK wrapped by the KMS CMK (or local KEK in dev). Null once shredded.
+  // Wrapped DEK. Null once shredded. Legacy rows are wrapped by LOCAL_KEK.
   wrappedKey: text("wrapped_key"),
-  keySource: text("key_source").notNull(), // "kms" | "local"
+  keySource: text("key_source").notNull(), // "local" | "customer"
+  // legacy | crk | sealed | link
+  wrapMode: text("wrap_mode").notNull().default("legacy"),
+  ownerType: text("owner_type"),
+  ownerId: uuid("owner_id"),
+  purpose: text("purpose"),
+  keyVersion: integer("key_version").notNull().default(0),
+  aad: text("aad"),
+  // Optional wrap under the deployment key so an authorised secure-link viewer
+  // can render a shared document. Wallet credentials do not set this. Operators
+  // with LOCAL_KEK can read only documents that were explicitly render-delegated.
+  renderWrapped: text("render_wrapped"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   shreddedAt: timestamp("shredded_at"),
 });
@@ -285,8 +299,11 @@ export const walletDocuments = pgTable("wallet_documents", {
   kind: text("kind").notNull(),
   fileName: text("file_name").notNull(),
   contentType: text("content_type").notNull(),
+  originalContentType: text("original_content_type"),
   storageKey: text("storage_key").notNull(),
   checksum: text("checksum"),
+  dekId: uuid("dek_id").references(() => dataKeys.id),
+  envelopeVersion: integer("envelope_version").notNull().default(0),
   scanStatus: scanStatus("scan_status").notNull().default("pending"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
@@ -451,9 +468,12 @@ export const documents = pgTable(
     kind: documentKind("kind").notNull(),
     fileName: text("file_name").notNull(),
     contentType: text("content_type").notNull(),
+    originalContentType: text("original_content_type"),
     sizeBytes: integer("size_bytes"),
     storageKey: text("storage_key").notNull(),
     checksum: text("checksum"),
+    dekId: uuid("dek_id").references(() => dataKeys.id),
+    envelopeVersion: integer("envelope_version").notNull().default(0),
     scanStatus: scanStatus("scan_status").notNull().default("pending"),
     watermarkRequired: boolean("watermark_required").notNull().default(true),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -755,6 +775,10 @@ export const apiKeys = pgTable(
     keyHash: text("key_hash").notNull().unique(),
     // First chars of the token (e.g. "rv_1a2b3c"), shown in the UI to identify it.
     prefix: text("prefix").notNull(),
+    scopes: jsonb("scopes").$type<string[]>().notNull().default(["legacy:full"]),
+    expiresAt: timestamp("expires_at"),
+    vaultKeyId: uuid("vault_key_id"),
+    wrappedVaultKey: text("wrapped_vault_key"),
     lastUsedAt: timestamp("last_used_at"),
     revokedAt: timestamp("revoked_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -774,6 +798,10 @@ export const candidateApiKeys = pgTable(
     name: text("name").notNull(),
     keyHash: text("key_hash").notNull().unique(),
     prefix: text("prefix").notNull(),
+    scopes: jsonb("scopes").$type<string[]>().notNull().default(["legacy:full"]),
+    expiresAt: timestamp("expires_at"),
+    vaultKeyId: uuid("vault_key_id"),
+    wrappedVaultKey: text("wrapped_vault_key"),
     lastUsedAt: timestamp("last_used_at"),
     revokedAt: timestamp("revoked_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -802,3 +830,173 @@ export const discoveryProfiles = pgTable("discovery_profiles", {
   location: text("location"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// Customer vaults. One active key per organisation or candidate account.
+// The raw customer key is never stored. privateKeyWrapped is the X25519
+// private key wrapped by that customer key. Shredding nulls it.
+// ---------------------------------------------------------------------------
+
+export const vaultKeys = pgTable(
+  "vault_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerType: text("owner_type").notNull(),
+    ownerId: uuid("owner_id").notNull(),
+    version: integer("version").notNull(),
+    status: text("status").notNull().default("active"),
+    formatVersion: integer("format_version").notNull().default(1),
+    verifier: text("verifier").notNull(),
+    publicKey: text("public_key").notNull(),
+    privateKeyWrapped: text("private_key_wrapped"),
+    kdf: text("kdf"),
+    kdfSalt: text("kdf_salt"),
+    kdfParams: jsonb("kdf_params").$type<{ N: number; r: number; p: number; version: number }>(),
+    enrolledAt: timestamp("enrolled_at").notNull().defaultNow(),
+    retiredAt: timestamp("retired_at"),
+  },
+  (t) => [
+    uniqueIndex("vault_keys_owner_version_idx").on(t.ownerType, t.ownerId, t.version),
+    uniqueIndex("vault_keys_one_active_idx")
+      .on(t.ownerType, t.ownerId)
+      .where(sql`${t.status} = 'active'`),
+    index("vault_keys_owner_idx").on(t.ownerType, t.ownerId),
+  ],
+);
+
+export const vaultUnlocks = pgTable(
+  "vault_unlocks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    vaultKeyId: uuid("vault_key_id")
+      .notNull()
+      .references(() => vaultKeys.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => session.id, { onDelete: "cascade" }),
+    wrappedCrk: text("wrapped_crk").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("vault_unlocks_session_key_idx").on(t.sessionId, t.vaultKeyId)],
+);
+
+export const vaultRotations = pgTable("vault_rotations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  ownerType: text("owner_type").notNull(),
+  ownerId: uuid("owner_id").notNull(),
+  fromVersion: integer("from_version").notNull(),
+  toVersion: integer("to_version").notNull(),
+  state: text("state").notNull().default("pending"),
+  rotatedCount: integer("rotated_count").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"),
+});
+
+export const platformBootstrap = pgTable("platform_bootstrap", {
+  id: text("id").primaryKey().default("platform"),
+  tokenHash: text("token_hash").notNull(),
+  consumedAt: timestamp("consumed_at"),
+  consumedByUserId: text("consumed_by_user_id"),
+});
+
+export const outboxEvents = pgTable(
+  "outbox_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    eventName: text("event_name").notNull(),
+    eventVersion: integer("event_version").notNull().default(1),
+    ownerScope: text("owner_scope"),
+    payload: jsonb("payload").notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+    state: text("state").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    availableAt: timestamp("available_at").notNull().defaultNow(),
+    publishedAt: timestamp("published_at"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("outbox_events_dedupe_idx").on(t.dedupeKey),
+    index("outbox_events_state_idx").on(t.state, t.availableAt),
+  ],
+);
+
+export const deletionTasks = pgTable(
+  "deletion_tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    storageKey: text("storage_key").notNull(),
+    ownerScope: text("owner_scope"),
+    state: text("state").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    availableAt: timestamp("available_at").notNull().defaultNow(),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    completedAt: timestamp("completed_at"),
+  },
+  (t) => [index("deletion_tasks_state_idx").on(t.state, t.availableAt)],
+);
+
+export const erasureRecords = pgTable("erasure_records", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  subjectType: text("subject_type").notNull(),
+  subjectId: text("subject_id").notNull(),
+  accessRevokedAt: timestamp("access_revoked_at"),
+  keysShreddedAt: timestamp("keys_shredded_at"),
+  cleanupPendingAt: timestamp("cleanup_pending_at"),
+  cleanupFinishedAt: timestamp("cleanup_finished_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const documentMigrations = pgTable(
+  "document_migrations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tableName: text("table_name").notNull(),
+    documentId: uuid("document_id").notNull(),
+    oldStorageKey: text("old_storage_key").notNull(),
+    newStorageKey: text("new_storage_key").notNull(),
+    dekId: uuid("dek_id").references(() => dataKeys.id),
+    state: text("state").notNull().default("uploaded"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("document_migrations_document_idx").on(t.tableName, t.documentId)],
+);
+
+// Installation-wide encrypted backup to Cloudflare R2. Secrets are wrapped by
+// LOCAL_KEK. The raw backup key and R2 secret are never stored.
+export const backupConfig = pgTable("backup_config", {
+  id: text("id").primaryKey().default("platform"),
+  enabled: boolean("enabled").notNull().default(false),
+  hourUtc: integer("hour_utc").notNull().default(16),
+  retainCount: integer("retain_count").notNull().default(14),
+  r2AccountId: text("r2_account_id").notNull(),
+  r2Bucket: text("r2_bucket").notNull(),
+  r2AccessKeyId: text("r2_access_key_id").notNull(),
+  r2SecretWrapped: text("r2_secret_wrapped").notNull(),
+  backupKeyWrapped: text("backup_key_wrapped").notNull(),
+  updatedBy: text("updated_by"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const backupRuns = pgTable(
+  "backup_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    trigger: text("trigger").notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+    status: text("status").notNull().default("running"),
+    objectKey: text("object_key"),
+    sizeBytes: integer("size_bytes"),
+    checksum: text("checksum"),
+    error: text("error"),
+    startedAt: timestamp("started_at").notNull().defaultNow(),
+    finishedAt: timestamp("finished_at"),
+  },
+  (t) => [
+    uniqueIndex("backup_runs_dedupe_idx").on(t.dedupeKey),
+    index("backup_runs_started_idx").on(t.startedAt),
+  ],
+);

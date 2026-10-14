@@ -15,8 +15,11 @@ import {
 import { requireCandidate, requestMeta } from "@/lib/guards";
 import { encryptField, shredDataKey } from "@/lib/crypto";
 import { audit } from "@/lib/audit";
-import { sendEvent } from "@/inngest/client";
-import { newStorageKey, putObjectBytes, deleteObject } from "@/lib/storage";
+import { enqueueEvent, publishPendingOutbox } from "@/lib/outbox";
+import { deleteObject } from "@/lib/storage";
+import { activeVault } from "@/lib/vault-store";
+import { readUnlockedCustomerKey } from "@/lib/vault-session";
+import { protectDocument, putProtectedObject } from "@/lib/document-protect";
 import { sniffContentType } from "@/lib/scan";
 import {
   UPLOAD_MAX_BYTES,
@@ -38,6 +41,9 @@ export async function upsertWalletItem(formData: FormData): Promise<ActionResult
     return { ok: false, error: "Unknown credential type." };
   }
   if (!value) return { ok: false, error: "A value is required." };
+  const crk = await readUnlockedCustomerKey("candidate", ctx.candidateAccountId);
+  const vault = await activeVault("candidate", ctx.candidateAccountId);
+  if (!crk || !vault) return { ok: false, error: "Unlock your encryption key before saving credentials." };
 
   const [existing] = await db
     .select()
@@ -49,7 +55,14 @@ export async function upsertWalletItem(formData: FormData): Promise<ActionResult
       ),
     );
 
-  const { valueEncrypted, dekId } = await encryptField(value);
+  const { valueEncrypted, dekId } = await encryptField(value, {
+    mode: "crk",
+    crk,
+    ownerType: "candidate",
+    ownerId: ctx.candidateAccountId,
+    purpose: type,
+    keyVersion: vault.version,
+  });
 
   if (existing) {
     // Shred the old key so the previous value is unrecoverable.
@@ -130,6 +143,9 @@ export async function uploadWalletDocument(formData: FormData): Promise<ActionRe
 
   const bytes = Buffer.from(await file.arrayBuffer());
   const sniffed = sniffContentType(bytes);
+  const crk = await readUnlockedCustomerKey("candidate", ctx.candidateAccountId);
+  const vault = await activeVault("candidate", ctx.candidateAccountId);
+  if (!crk || !vault) return { ok: false, error: "Unlock your encryption key before uploading." };
   if (!sniffed || !allowedTypesForWalletDocument(kind).includes(sniffed)) {
     return {
       ok: false,
@@ -139,22 +155,46 @@ export async function uploadWalletDocument(formData: FormData): Promise<ActionRe
     };
   }
 
-  const storageKey = newStorageKey("wallet", ctx.candidateAccountId, file.name);
-  await putObjectBytes(storageKey, bytes, sniffed);
+  const prepared = await protectDocument({
+    executor: db,
+    bytes,
+    ownerType: "candidate",
+    ownerId: ctx.candidateAccountId,
+    purpose: kind,
+    keyVersion: vault.version,
+    crk,
+    scope: "wallet",
+  });
+  if (!prepared.ok) return prepared;
+  await putProtectedObject(prepared.storageKey, prepared.ciphertext);
 
-  const [doc] = await db
-    .insert(walletDocuments)
-    .values({
-      candidateAccountId: ctx.candidateAccountId,
-      kind,
-      fileName: file.name,
-      contentType: sniffed,
-      storageKey,
-      checksum: createHash("sha256").update(bytes).digest("hex"),
-    })
-    .returning({ id: walletDocuments.id });
-
-  await sendEvent("document/uploaded", { documentId: doc.id, table: "wallet_documents" });
+  const [doc] = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(walletDocuments)
+      .values({
+        id: prepared.documentId,
+        candidateAccountId: ctx.candidateAccountId,
+        kind,
+        fileName: file.name,
+        contentType: "application/octet-stream",
+        originalContentType: sniffed,
+        storageKey: prepared.storageKey,
+        checksum: createHash("sha256").update(bytes).digest("hex"),
+        dekId: prepared.dekId,
+        envelopeVersion: 1,
+        scanStatus: "clean",
+      })
+      .returning({ id: walletDocuments.id });
+    await enqueueEvent(
+      tx,
+      "document/uploaded",
+      { documentId: inserted.id, table: "wallet_documents" },
+      `document/uploaded:wallet_documents:${inserted.id}`,
+      ctx.candidateAccountId,
+    );
+    return [inserted];
+  });
+  await publishPendingOutbox();
 
   const meta = await requestMeta();
   await audit({

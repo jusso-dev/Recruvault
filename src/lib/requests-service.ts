@@ -11,7 +11,7 @@ import {
 } from "@/db/schema";
 import type { OrgContext } from "@/lib/guards";
 import { audit } from "@/lib/audit";
-import { sendEvent } from "@/inngest/client";
+import { emitEvent } from "@/lib/outbox";
 import {
   fieldDefinition,
   DEFAULT_REQUEST_FIELD_KEYS,
@@ -150,7 +150,12 @@ export async function createRequestCore(
   });
 
   if ((input.listed ?? false) && skills.length > 0) {
-    await sendEvent("job-alert/role-listed", { requestId: request.id });
+    await emitEvent(
+      "job-alert/role-listed",
+      { requestId: request.id },
+      `job-alert/role-listed:${request.id}`,
+      ctx.orgId,
+    );
   }
 
   return request.id;
@@ -207,5 +212,10 @@ export async function sendRequestCore(
     .where(eq(suppressions.email, email));
   if (suppressed) throw new ApiError(409, "That address is suppressed (previously bounced).");
 
-  await sendEvent("request/send", { requestId, recipientEmail: email, sentBy: ctx.userId });
+  await emitEvent(
+    "request/send",
+    { requestId, recipientEmail: email, sentBy: ctx.userId },
+    `request/send:${requestId}:${email.toLowerCase()}`,
+    ctx.orgId,
+  );
 }

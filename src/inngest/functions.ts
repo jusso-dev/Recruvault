@@ -23,6 +23,9 @@ import { getObjectBytes, deleteObject } from "@/lib/storage";
 import { scanBytes, sniffContentType } from "@/lib/scan";
 import { audit } from "@/lib/audit";
 import { findPurgeDueSubmissionIds, purgeSubmission } from "@/lib/retention";
+import { publishPendingOutbox } from "@/lib/outbox";
+import { processDeletionTasks } from "@/lib/deletion-queue";
+import { nightlyBackupIfDue } from "@/lib/backup";
 import { getLogger } from "@/lib/logger";
 import { deliverJobMatch, queueJobMatches } from "@/lib/job-matches";
 
@@ -206,6 +209,10 @@ export const scanDocument = inngest.createFunction(
       const tbl = table === "documents" ? documents : walletDocuments;
       const [doc] = await db.select().from(tbl).where(eq(tbl.id, documentId));
       if (!doc) return "missing";
+      // Ciphertext is scanned before it is stored. A lost event must not treat
+      // those bytes as a document, and it must not mark an already-clean file
+      // pending again.
+      if (doc.scanStatus !== "pending" || doc.envelopeVersion > 0) return doc.scanStatus;
 
       let bytes: Buffer;
       try {
@@ -453,6 +460,27 @@ export const subscriptionJobAlerts = inngest.createFunction(
   },
 );
 
+export const publishOutbox = inngest.createFunction(
+  { id: "publish-outbox", triggers: [{ cron: "*/1 * * * *" }] },
+  async ({ step }) => {
+    const published = await step.run("publish", () => publishPendingOutbox());
+    return { published };
+  },
+);
+
+export const retryDeletions = inngest.createFunction(
+  { id: "retry-deletions", triggers: [{ cron: "*/1 * * * *" }] },
+  async ({ step }) => {
+    const finished = await step.run("delete", () => processDeletionTasks());
+    return { finished };
+  },
+);
+
+export const nightlyBackup = inngest.createFunction(
+  { id: "nightly-backup", retries: 1, triggers: [{ cron: "0 * * * *" }] },
+  async ({ step }) => step.run("backup-if-due", () => nightlyBackupIfDue()),
+);
+
 export const functions = [
   deliverRequest,
   scanDocument,
@@ -463,4 +491,7 @@ export const functions = [
   emailEvents,
   listedRoleJobAlerts,
   subscriptionJobAlerts,
+  publishOutbox,
+  retryDeletions,
+  nightlyBackup,
 ];

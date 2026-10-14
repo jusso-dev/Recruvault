@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { and, eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { db } from "@/db";
-import { candidateAccounts, memberships, organisations } from "@/db/schema";
+import { candidateAccounts, memberships, organisations, user } from "@/db/schema";
 import { can, type OrgRole, type Permission } from "@/lib/rbac";
 
 /**
@@ -146,6 +146,12 @@ export async function requireCandidate(): Promise<CandidateContext> {
   if ((session.user as { accountType?: string }).accountType === "org") {
     throw new AuthError("Job seeker account required.");
   }
+
+  const [account] = await db
+    .select({ erasedAt: user.erasedAt })
+    .from(user)
+    .where(eq(user.id, session.user.id));
+  if (account?.erasedAt) throw new AuthError("This account has been deleted.");
 
   let [ca] = await db
     .select()

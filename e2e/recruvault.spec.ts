@@ -12,6 +12,8 @@ test.describe.configure({ mode: "serial" });
 const AUTH_DIR = ".playwright/auth";
 const SCREENSHOT_DIR = "docs/screenshots";
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:3100";
+const BOOTSTRAP_TOKEN = "e2e-bootstrap-token-not-for-production";
+const vaultKeys = new Map<string, string>();
 const OWNER_STATE = `${AUTH_DIR}/owner.json`;
 const REVIEWER_STATE = `${AUTH_DIR}/reviewer.json`;
 const SEEKER_STATE = `${AUTH_DIR}/seeker.json`;
@@ -67,6 +69,21 @@ function toast(page: Page) {
   return page.getByRole("button", { name: "Dismiss notification" }).locator("..");
 }
 
+async function fillEncryptionKey(page: Page) {
+  await page.getByRole("button", { name: "Generate encryption key" }).click();
+  const key = await page.getByLabel("Encryption key", { exact: true }).inputValue();
+  await page.getByLabel("Confirm encryption key").fill(key);
+  await page.getByRole("checkbox", { name: /saved this encryption key/i }).check();
+  return key;
+}
+
+async function unlockIfNeeded(page: Page, key: string) {
+  if (page.url().includes("/vault/unlock") || (await page.getByRole("heading", { name: "Unlock encryption key" }).isVisible().catch(() => false))) {
+    await page.getByLabel("Encryption key").fill(key);
+    await page.getByRole("button", { name: "Unlock vault" }).click();
+  }
+}
+
 async function signUp(
   page: Page,
   account: (typeof accounts)[keyof typeof accounts],
@@ -102,7 +119,16 @@ async function signUp(
     await page.context().clearCookies();
     await page.goto(email.ctaUrl!);
   }
-  await page.waitForURL(type === "org" ? "**/onboarding" : "**/overview");
+  if (type === "org") {
+    await page.waitForURL("**/onboarding");
+    return;
+  }
+  await page.waitForURL(/\/(vault\/enroll|overview)/);
+  if (page.url().includes("/vault/enroll")) {
+    vaultKeys.set(account.email, await fillEncryptionKey(page));
+    await page.getByRole("button", { name: "Save encryption key" }).click();
+    await page.waitForURL("**/overview");
+  }
 }
 
 async function newAuthenticatedPage(browser: Browser, storageState: string) {
@@ -131,11 +157,29 @@ test("creates recruiter, reviewer, and job-seeker accounts through the UI", asyn
       await page.getByLabel("Last name").fill("Stone");
       await page.getByLabel("Work email").fill(accounts.bootstrap.email);
       await page.getByLabel("Organisation name").fill("E2E Platform Bootstrap");
+      await page.getByLabel("Bootstrap token").fill(BOOTSTRAP_TOKEN);
+      await fillEncryptionKey(page);
       await page.getByLabel("Password", { exact: true }).fill(accounts.bootstrap.password);
       await page.getByLabel("Confirm password").fill("does-not-match");
       await page.getByRole("button", { name: "Create owner and organisation" }).click();
       await expect(toast(page)).toContainText("passwords do not match");
       await page.getByLabel("Confirm password").fill(accounts.bootstrap.password);
+      await page.getByRole("button", { name: "Create owner and organisation" }).click();
+      await expect(toast(page)).toContainText("Verify your email");
+      const setupMail = await waitForEmail({
+        to: accounts.bootstrap.email,
+        subject: "Verify your email: Recruvault",
+      });
+      expect(setupMail.ctaUrl).toBeTruthy();
+      await page.context().clearCookies();
+      await page.goto(setupMail.ctaUrl!);
+      await page.waitForURL("**/setup");
+      await page.getByLabel("First name").fill("Bailey");
+      await page.getByLabel("Last name").fill("Stone");
+      await page.getByLabel("Work email").fill(accounts.bootstrap.email);
+      await page.getByLabel("Organisation name").fill("E2E Platform Bootstrap");
+      await page.getByLabel("Bootstrap token").fill(BOOTSTRAP_TOKEN);
+      await fillEncryptionKey(page);
       await page.getByRole("button", { name: "Create owner and organisation" }).click();
       await page.waitForURL("**/dashboard");
       await expect(
@@ -202,6 +246,9 @@ test("creates recruiter, reviewer, and job-seeker accounts through the UI", asyn
     await resetPage.getByLabel("Email").fill(accounts.recovery.email);
     await resetPage.getByLabel("Password").fill("UpdatedSecure!456");
     await resetPage.getByRole("button", { name: "Sign in" }).click();
+    await resetPage.waitForURL("**/vault/unlock**");
+    await resetPage.getByLabel("Encryption key").fill(vaultKeys.get(accounts.recovery.email) ?? "");
+    await resetPage.getByRole("button", { name: "Unlock vault" }).click();
     await expect(
       resetPage.getByRole("heading", { name: "Your application dashboard" }),
     ).toBeVisible();
@@ -211,6 +258,7 @@ test("creates recruiter, reviewer, and job-seeker accounts through the UI", asyn
   await test.step("create the organisation owner and workspace", async () => {
     await signUp(page, accounts.owner, "org");
     await page.getByLabel("Organisation name").fill(organisationName);
+    vaultKeys.set(accounts.owner.email, await fillEncryptionKey(page));
     await page.getByRole("button", { name: "Create organisation" }).click();
     await page.waitForURL("**/dashboard");
     await expect(page.getByRole("heading", { name: "Placement dashboard" })).toBeVisible();
@@ -358,6 +406,8 @@ test("creates a role and enforces recruiter-only permissions", async ({ browser 
     await expect(reviewer.page.getByText(accounts.reviewer.email)).toBeVisible();
     await setUserEmailVerified(accounts.reviewer.email, true);
 
+    await reviewer.page.goto("/dashboard/requests/new");
+    await unlockIfNeeded(reviewer.page, vaultKeys.get(accounts.owner.email) ?? "");
     await reviewer.page.goto("/dashboard/requests/new");
     await expect(reviewer.page.getByRole("heading", { name: "You can't view this" })).toBeVisible();
     await expect(reviewer.page.getByRole("link", { name: "New role" })).toHaveCount(0);
@@ -658,6 +708,10 @@ test("recruiter progresses and shares an application while reviewer stays read-o
   await test.step("allow shared read-only access and block reviewer administration", async () => {
     const reviewer = await newAuthenticatedPage(browser, REVIEWER_STATE);
     await reviewer.page.goto(`/dashboard/requests/${requestId}/submissions/${submissionId}`);
+    await unlockIfNeeded(reviewer.page, vaultKeys.get(accounts.owner.email) ?? "");
+    if (!reviewer.page.url().includes("/submissions/")) {
+      await reviewer.page.goto(`/dashboard/requests/${requestId}/submissions/${submissionId}`);
+    }
     await expect(reviewer.page.getByText("AGSVA-CL-2048", { exact: true })).toBeVisible();
     await expect(reviewer.page.getByLabel("Set status")).toHaveCount(0);
     await capture(reviewer.page, "23-reviewer-read-only.png");

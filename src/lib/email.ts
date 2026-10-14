@@ -146,11 +146,8 @@ export async function sendEmail(c: EmailContent): Promise<string | null> {
     if (process.env.NODE_ENV === "production") {
       throw new Error("Email delivery is not configured.");
     }
-    // Dev fallback: log instead of failing hard so local flows keep working.
-    log.info(
-      { to: c.to, subject: c.subject, code: c.code, url: c.ctaUrl },
-      "email (dev fallback, not sent)",
-    );
+    // Dev fallback: record that delivery did not happen, without the secret.
+    log.info({ subject: c.subject, delivery: "not-sent" }, "email (dev fallback, not sent)");
     return null;
   }
   const { data, error } = await client().emails.send({
@@ -290,6 +287,6 @@ export async function sendErasureConfirmation(opts: { to: string }) {
     to: opts.to,
     subject: "Your data has been deleted — Recruvault",
     heading: "Deletion confirmed",
-    body: "Your requested data has been deleted from Recruvault using cryptographic shredding — the encryption keys were destroyed, making the data unrecoverable. A metadata-only audit record of the deletion is retained.",
+    body: "Your Recruvault career record has been deleted. Access was revoked, encryption keys for that record were destroyed, and stored files are queued for removal. A metadata-only audit record remains. This does not erase copies that were already in a backup taken before deletion; those copies age out with the backup window and cannot be opened once the keys are gone. Signing in again will not restore the deleted record.",
   });
 }

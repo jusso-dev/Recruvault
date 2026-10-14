@@ -39,7 +39,13 @@ async function api(path, { method = "GET", body, formData } = {}) {
     data = { raw: text };
   }
   if (!res.ok) {
-    throw new Error(`${res.status} ${data.error ?? res.statusText}`);
+    const hint =
+      res.status === 403 || res.status === 401
+        ? " Check the key scope, expiry, and whether the vault is unlocked and enrolled."
+        : res.status === 429
+          ? " Wait for the Retry-After period before retrying."
+          : "";
+    throw new Error(`${res.status} ${data.error ?? res.statusText}.${hint}`);
   }
   return data;
 }

@@ -9,7 +9,7 @@ import { handle, json } from "@/lib/api/http";
 /** List only the authenticated job seeker's own applications. */
 export async function GET(req: NextRequest) {
   return handle(async () => {
-    const ctx = await resolveCandidateContext(req);
+    const ctx = await resolveCandidateContext(req, "applications:read");
     const rows = await db
       .select({
         id: submissions.id,

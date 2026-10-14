@@ -6,7 +6,7 @@ import { sendRequestCore } from "@/lib/requests-service";
 /** Send a request's secure link to an email or a matched candidate handle. */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
-    const ctx = await resolveOrgContext(req, "requests:create");
+    const ctx = await resolveOrgContext(req, "requests:create", "invitations:send");
     const { id } = await params;
     const body = await req.json().catch(() => {
       throw new ApiError(400, "Invalid JSON body.");

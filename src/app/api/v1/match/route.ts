@@ -9,7 +9,7 @@ import { matchCandidates } from "@/lib/match";
  */
 export async function POST(req: NextRequest) {
   return handle(async () => {
-    await resolveOrgContext(req, "requests:create");
+    await resolveOrgContext(req, "requests:create", "match:read");
     const body = await req.json().catch(() => {
       throw new ApiError(400, "Invalid JSON body.");
     });

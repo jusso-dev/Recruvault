@@ -3,12 +3,17 @@ import { and, eq, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   accessTokens,
+  candidateApiKeys,
   documents,
+  erasureRecords,
   organisations,
   requests,
+  session,
   submissionDocuments,
   submissions,
   submissionValues,
+  user,
+  vaultKeys,
   walletDocuments,
   walletItems,
   walletShares,
@@ -16,11 +21,8 @@ import {
   candidateAccounts,
 } from "@/db/schema";
 import { shredDataKey } from "@/lib/crypto";
-import { deleteObject } from "@/lib/storage";
+import { enqueueDeletion, processDeletionTasks } from "@/lib/deletion-queue";
 import { audit } from "@/lib/audit";
-import { getLogger } from "@/lib/logger";
-
-const log = getLogger("retention");
 
 /**
  * Retention and deletion.
@@ -57,20 +59,17 @@ export async function purgeSubmission(
     for (const v of values) await shredDataKey(v.dekId, tx);
     await tx.delete(submissionValues).where(eq(submissionValues.submissionId, submissionId));
     await tx.delete(submissionDocuments).where(eq(submissionDocuments.submissionId, submissionId));
-    for (const d of docs) await tx.delete(documents).where(eq(documents.id, d.documentId));
+    for (const d of docs) {
+      await enqueueDeletion(tx, d.storageKey, req?.orgId ?? null);
+      await tx.delete(documents).where(eq(documents.id, d.documentId));
+    }
     await tx
       .update(submissions)
       .set({ purgedAt: new Date(), responderEmail: null })
       .where(eq(submissions.id, submissionId));
   });
 
-  for (const d of docs) {
-    try {
-      await deleteObject(d.storageKey);
-    } catch (err) {
-      log.error({ storageKey: d.storageKey, err }, "storage object delete failed");
-    }
-  }
+  await processDeletionTasks();
 
   await audit({
     orgId: req?.orgId,
@@ -143,6 +142,12 @@ export async function runRetentionPurge(): Promise<number> {
  * documents, and purge every submission tied to the account.
  */
 export async function eraseCandidate(candidateAccountId: string): Promise<void> {
+  const [account] = await db
+    .select()
+    .from(candidateAccounts)
+    .where(eq(candidateAccounts.id, candidateAccountId));
+  if (!account) return;
+
   const items = await db
     .select()
     .from(walletItems)
@@ -151,28 +156,39 @@ export async function eraseCandidate(candidateAccountId: string): Promise<void> 
     .select()
     .from(walletDocuments)
     .where(eq(walletDocuments.candidateAccountId, candidateAccountId));
-
-  // Shred wallet DEKs and drop the rows atomically; delete objects after commit.
-  await db.transaction(async (tx) => {
-    for (const item of items) await shredDataKey(item.dekId, tx);
-    await tx.delete(walletItems).where(eq(walletItems.candidateAccountId, candidateAccountId));
-    await tx
-      .delete(walletDocuments)
-      .where(eq(walletDocuments.candidateAccountId, candidateAccountId));
-  });
-
-  for (const doc of docs) {
-    try {
-      await deleteObject(doc.storageKey);
-    } catch (err) {
-      log.error({ storageKey: doc.storageKey, err }, "storage object delete failed");
-    }
-  }
-
   const subs = await db
     .select({ id: submissions.id })
     .from(submissions)
     .where(eq(submissions.candidateAccountId, candidateAccountId));
+
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    for (const item of items) await shredDataKey(item.dekId, tx);
+    for (const doc of docs) {
+      if (doc.dekId) await shredDataKey(doc.dekId, tx);
+      await enqueueDeletion(tx, doc.storageKey, candidateAccountId);
+    }
+    await tx.delete(walletItems).where(eq(walletItems.candidateAccountId, candidateAccountId));
+    await tx.delete(walletDocuments).where(eq(walletDocuments.candidateAccountId, candidateAccountId));
+    await tx
+      .update(candidateApiKeys)
+      .set({ revokedAt: now, wrappedVaultKey: null })
+      .where(eq(candidateApiKeys.candidateAccountId, candidateAccountId));
+    await tx.delete(session).where(eq(session.userId, account.userId));
+    await tx
+      .update(vaultKeys)
+      .set({ privateKeyWrapped: null, status: "shredded", retiredAt: now })
+      .where(and(eq(vaultKeys.ownerType, "candidate"), eq(vaultKeys.ownerId, candidateAccountId)));
+    await tx.update(user).set({ erasedAt: now, updatedAt: now }).where(eq(user.id, account.userId));
+    await tx.insert(erasureRecords).values({
+      subjectType: "candidate",
+      subjectId: candidateAccountId,
+      accessRevokedAt: now,
+      keysShreddedAt: now,
+      cleanupPendingAt: now,
+    });
+  });
+
   for (const s of subs) {
     await purgeSubmission(s.id, { actorType: "candidate", actorId: candidateAccountId });
   }
@@ -180,6 +196,15 @@ export async function eraseCandidate(candidateAccountId: string): Promise<void> 
   await db.delete(walletShares).where(eq(walletShares.candidateAccountId, candidateAccountId));
   await db.delete(savedRoles).where(eq(savedRoles.candidateAccountId, candidateAccountId));
   await db.delete(candidateAccounts).where(eq(candidateAccounts.id, candidateAccountId));
+  await processDeletionTasks();
+
+  const pending = docs.length + subs.length;
+  if (pending === 0) {
+    await db
+      .update(erasureRecords)
+      .set({ cleanupFinishedAt: new Date() })
+      .where(eq(erasureRecords.subjectId, candidateAccountId));
+  }
 
   await audit({
     actorType: "candidate",

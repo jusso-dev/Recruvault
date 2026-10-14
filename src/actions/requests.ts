@@ -18,8 +18,10 @@ import {
 } from "@/db/schema";
 import { requireOrgUser, requestMeta } from "@/lib/guards";
 import { audit } from "@/lib/audit";
-import { sendEvent } from "@/inngest/client";
-import { newStorageKey, putObjectBytes } from "@/lib/storage";
+import { emitEvent, enqueueEvent, publishPendingOutbox } from "@/lib/outbox";
+import { activeVault } from "@/lib/vault-store";
+import { readUnlockedCustomerKey } from "@/lib/vault-session";
+import { protectDocument, putProtectedObject } from "@/lib/document-protect";
 import {
   fieldDefinition,
   JD_ALLOWED_TYPES,
@@ -114,22 +116,50 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
     if (!sniffed || !JD_ALLOWED_TYPES.includes(sniffed)) {
       return { ok: false, error: "The JD must be a PDF or Word (.docx) document." };
     }
-    const storageKey = newStorageKey("org", ctx.orgId, jd.name);
-    await putObjectBytes(storageKey, bytes, sniffed);
-    const [doc] = await db
-      .insert(documents)
-      .values({
-        orgId: ctx.orgId,
-        kind: "jd",
-        fileName: jd.name,
-        contentType: sniffed,
-        sizeBytes: jd.size,
-        storageKey,
-        checksum: createHash("sha256").update(bytes).digest("hex"),
-      })
-      .returning({ id: documents.id });
+    const crk = await readUnlockedCustomerKey("organisation", ctx.orgId);
+    const vault = await activeVault("organisation", ctx.orgId);
+    if (!crk || !vault) return { ok: false, error: "Unlock the organisation encryption key before uploading." };
+    const prepared = await protectDocument({
+      executor: db,
+      bytes,
+      ownerType: "organisation",
+      ownerId: ctx.orgId,
+      purpose: "jd",
+      keyVersion: vault.version,
+      crk,
+      scope: "org",
+    });
+    if (!prepared.ok) return prepared;
+    await putProtectedObject(prepared.storageKey, prepared.ciphertext);
+    const [doc] = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(documents)
+        .values({
+          id: prepared.documentId,
+          orgId: ctx.orgId,
+          kind: "jd",
+          fileName: jd.name,
+          contentType: "application/octet-stream",
+          originalContentType: sniffed,
+          sizeBytes: jd.size,
+          storageKey: prepared.storageKey,
+          checksum: createHash("sha256").update(bytes).digest("hex"),
+          dekId: prepared.dekId,
+          envelopeVersion: 1,
+          scanStatus: "clean",
+        })
+        .returning({ id: documents.id });
+      await enqueueEvent(
+        tx,
+        "document/uploaded",
+        { documentId: inserted.id, table: "documents" },
+        `document/uploaded:documents:${inserted.id}`,
+        ctx.orgId,
+      );
+      return [inserted];
+    });
     jdDocumentId = doc.id;
-    await sendEvent("document/uploaded", { documentId: doc.id, table: "documents" });
+    await publishPendingOutbox();
   }
 
   const [request] = await db
@@ -204,7 +234,7 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
   });
 
   if (listed && skills.length > 0) {
-    await sendEvent("job-alert/role-listed", { requestId: request.id });
+    await emitEvent("job-alert/role-listed", { requestId: request.id }, `job-alert/role-listed:${request.id}`, ctx.orgId);
   }
 
   revalidatePath("/dashboard");
@@ -272,12 +302,12 @@ export async function sendRequest(formData: FormData): Promise<ActionResult> {
     };
   }
 
-  await sendEvent("request/send", {
-    requestId,
-    recipientEmail,
-    recipientPhone,
-    sentBy: ctx.userId,
-  });
+  await emitEvent(
+    "request/send",
+    { requestId, recipientEmail, recipientPhone, sentBy: ctx.userId },
+    `request/send:${requestId}:${recipientEmail.toLowerCase()}`,
+    ctx.orgId,
+  );
 
   revalidatePath(`/dashboard/requests/${requestId}`);
   return { ok: true };

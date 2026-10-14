@@ -1,4 +1,7 @@
+import { redirect } from "next/navigation";
 import { requireDashboardUser } from "@/lib/dashboard-auth";
+import { activeVault } from "@/lib/vault-store";
+import { readUnlockedCustomerKey } from "@/lib/vault-session";
 import { can } from "@/lib/rbac";
 import { AppShell, type AppNavItem } from "@/components/app-shell";
 
@@ -8,6 +11,11 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const ctx = await requireDashboardUser();
+  const vault = await activeVault("organisation", ctx.orgId);
+  if (!vault) redirect(ctx.role === "owner" ? "/vault/enroll" : "/vault/waiting");
+  if (!(await readUnlockedCustomerKey("organisation", ctx.orgId))) {
+    redirect("/vault/unlock?next=/dashboard");
+  }
 
   const nav: AppNavItem[] = [
     { href: "/dashboard", label: "Dashboard", icon: "overview" },
