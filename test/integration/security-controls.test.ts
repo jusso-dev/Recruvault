@@ -2,9 +2,9 @@ import { randomBytes, randomUUID } from "crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { deletionTasks, outboxEvents } from "@/db/schema";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { setupMigratedDatabase } from "./harness";
 
-let container: StartedPostgreSqlContainer;
+let stop: () => Promise<void>;
 let db: typeof import("@/db").db;
 let crypto: typeof import("@/lib/crypto");
 let vault: typeof import("@/lib/vault-store");
@@ -13,13 +13,8 @@ let outbox: typeof import("@/lib/outbox");
 let deletion: typeof import("@/lib/deletion-queue");
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
-  process.env.DATABASE_URL = container.getConnectionUri();
   process.env.LOCAL_KEK = "11".repeat(32);
-
-  db = (await import("@/db")).db;
-  const { migrate } = await import("drizzle-orm/node-postgres/migrator");
-  await migrate(db, { migrationsFolder: "drizzle" });
+  ({ db, stop } = await setupMigratedDatabase());
   crypto = await import("@/lib/crypto");
   vault = await import("@/lib/vault-store");
   rotation = await import("@/lib/key-rotation");
@@ -28,13 +23,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (db) await (db.$client as { end: () => Promise<void> }).end();
-  await container?.stop();
+  await stop?.();
 });
 
 describe("customer vault on postgres", () => {
   it("keeps a legacy envelope readable and fails a cross-owner unwrap", async () => {
-    const legacy = await crypto.encryptField("legacy-value");
+    const legacy = await crypto.encryptField("legacy-value", { mode: "legacy" });
     expect(await crypto.decryptField(legacy.valueEncrypted, legacy.dekId)).toBe("legacy-value");
 
     const ownerA = randomUUID();

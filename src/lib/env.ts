@@ -33,6 +33,8 @@ const schema = z
     S3_ENDPOINT: z.string().url().optional(),
     S3_FORCE_PATH_STYLE: boolish,
     S3_SERVER_SIDE_ENCRYPTION: boolish,
+    // Versioned buckets: delete every version and marker, not just the latest.
+    S3_DELETE_ALL_VERSIONS: boolish,
     AWS_ACCESS_KEY_ID: z.string().optional(),
     AWS_SECRET_ACCESS_KEY: z.string().optional(),
 
@@ -58,6 +60,9 @@ const schema = z
     BOOTSTRAP_RECOVERY_TOKEN: z.string().optional(),
     // Comma-separated browser origins allowed to call /api/v1. Empty means same-origin only.
     API_CORS_ORIGINS: z.string().optional(),
+    // Reverse proxies in front of the app that append to X-Forwarded-For.
+    // The client address is read that many hops from the right.
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(1),
     PLAYWRIGHT_TEST: z.string().optional(),
 
     // Observability
@@ -75,6 +80,23 @@ const schema = z
     }
     if (val.INNGEST_DEV) fail("INNGEST_DEV", "INNGEST_DEV must not be set in production.");
     if (!val.INNGEST_SIGNING_KEY) fail("INNGEST_SIGNING_KEY", "INNGEST_SIGNING_KEY is required in production.");
+    if (!val.INNGEST_EVENT_KEY) fail("INNGEST_EVENT_KEY", "INNGEST_EVENT_KEY is required in production.");
+    // Verification, reset, and invitation mail is required for setup and sign-in.
+    if (!val.RESEND_API_KEY) fail("RESEND_API_KEY", "RESEND_API_KEY is required in production.");
+    if (!val.RESEND_FROM_EMAIL) fail("RESEND_FROM_EMAIL", "RESEND_FROM_EMAIL is required in production.");
+    if (!val.APP_URL.startsWith("https://")) fail("APP_URL", "APP_URL must use https in production.");
+    const secrets = {
+      BETTER_AUTH_SECRET: val.BETTER_AUTH_SECRET,
+      LOCAL_KEK: val.LOCAL_KEK,
+      BOOTSTRAP_TOKEN: val.BOOTSTRAP_TOKEN,
+    };
+    for (const [name, value] of Object.entries(secrets)) {
+      if (value && lowEntropy(value)) fail(name, `${name} looks like a placeholder. Generate it with openssl rand -hex 32.`);
+    }
+    const values = Object.values(secrets).filter(Boolean);
+    if (new Set(values).size !== values.length) {
+      fail("BETTER_AUTH_SECRET", "BETTER_AUTH_SECRET, LOCAL_KEK, and BOOTSTRAP_TOKEN must be different values.");
+    }
     const defaults = new Set(["recruvault", "recruvault-secret", "password", "postgres", "changeme"]);
     if (val.AWS_ACCESS_KEY_ID && defaults.has(val.AWS_ACCESS_KEY_ID)) {
       fail("AWS_ACCESS_KEY_ID", "Refusing a default object-storage access key in production.");
@@ -86,6 +108,12 @@ const schema = z
       fail("DATABASE_URL", "Refusing a default database password in production.");
     }
   });
+
+/** Repeated or placeholder values, e.g. "00…", "abab…", or a documented example. */
+function lowEntropy(value: string): boolean {
+  if (/placeholder|changeme|example|test-/i.test(value)) return true;
+  return new Set(value.toLowerCase()).size < 10;
+}
 
 export type Env = z.infer<typeof schema>;
 

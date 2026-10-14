@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { walletDocuments } from "@/db/schema";
 import { requireCandidate, requestMeta, AuthError } from "@/lib/guards";
-import { readProtectedDocument } from "@/lib/document-protect";
+import { DocumentAccessError, readProtectedDocument } from "@/lib/document-protect";
 import { audit } from "@/lib/audit";
 import { CAREER_DOCUMENT_KINDS } from "@/lib/fields";
 
@@ -53,8 +53,15 @@ export async function GET(
         ownerId: doc.candidateAccountId,
       })
     ).bytes;
-  } catch {
-    return NextResponse.json({ error: "Unlock the encryption key to view this document." }, { status: 409 });
+  } catch (err) {
+    if (!(err instanceof DocumentAccessError)) throw err;
+    if (err.reason === "locked") {
+      return NextResponse.json({ error: "Unlock the encryption key to view this document." }, { status: 409 });
+    }
+    if (err.reason === "shredded" || err.reason === "missing") {
+      return NextResponse.json({ error: "This document has been deleted." }, { status: 410 });
+    }
+    return NextResponse.json({ error: "The document could not be opened." }, { status: 500 });
   }
   const safeName = doc.fileName.replace(/[\r\n"]/g, "");
   return new NextResponse(body as unknown as BodyInit, {

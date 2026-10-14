@@ -8,7 +8,7 @@ import { can } from "@/lib/rbac";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
-    const ctx = await resolveOrgContext(req, undefined, "roles:read");
+    const ctx = await resolveOrgContext(req, null, "submissions:read");
     const { id } = await params;
 
     const [request] = await db

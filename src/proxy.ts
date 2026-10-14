@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionCookie } from "better-auth/cookies";
-import { eq } from "drizzle-orm";
-import { db } from "@/db";
-import { memberships } from "@/db/schema";
+import { isPlatformBootstrapped } from "@/lib/platform-bootstrap";
 import { buildContentSecurityPolicy, trustedConnectSources } from "@/lib/csp";
 import { corsHeaders } from "@/lib/cors";
 
@@ -49,18 +47,14 @@ export async function proxy(request: NextRequest) {
   if (pathname.startsWith("/api/")) return NextResponse.next();
 
   const { policy, requestHeaders } = pageCsp(request);
-  const [owner] = await db
-    .select({ id: memberships.id })
-    .from(memberships)
-    .where(eq(memberships.role, "owner"))
-    .limit(1);
+  const bootstrapped = await isPlatformBootstrapped();
 
-  if (!owner && pathname !== "/setup") {
+  if (!bootstrapped && pathname !== "/setup") {
     const response = NextResponse.redirect(new URL("/setup", request.url));
     response.headers.set("Content-Security-Policy", policy);
     return response;
   }
-  if (owner && pathname === "/setup") {
+  if (bootstrapped && pathname === "/setup") {
     const response = NextResponse.redirect(new URL("/sign-in", request.url));
     response.headers.set("Content-Security-Policy", policy);
     return response;

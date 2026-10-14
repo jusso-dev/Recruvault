@@ -1,23 +1,28 @@
 import "server-only";
-import { sql } from "drizzle-orm";
+import { lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { linkRateLimits } from "@/db/schema";
 
 /**
- * DB-backed fixed-window rate limiter for the link/OTP endpoints. Works across
- * app instances (unlike an in-memory counter). Defense-in-depth on top of the
- * per-token OTP counters — the primary control remains the token-scoped caps.
- *
- * The IP comes from `x-forwarded-for`, which is proxy-controlled, so treat this
- * as best-effort throttling, not authentication.
- *
- * @returns true when the request is allowed, false when the limit is exceeded.
+ * DB-backed fixed-window rate limiter for the link/OTP endpoints and the v1
+ * API. Works across app instances (unlike an in-memory counter): the single
+ * upsert is atomic, so concurrent requests on any instance share one count.
+ * Defense-in-depth on top of the per-token OTP counters — the primary control
+ * remains the token-scoped caps.
  */
-export async function checkRateLimit(
+
+export interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  /** Seconds until the current window resets. */
+  retryAfterSeconds: number;
+}
+
+export async function consumeRateLimit(
   key: string,
   max: number,
   windowMs: number,
-): Promise<boolean> {
+): Promise<RateLimitResult> {
   const windowSql = sql`(now() - (${windowMs} || ' milliseconds')::interval)`;
   const [row] = await db
     .insert(linkRateLimits)
@@ -31,7 +36,35 @@ export async function checkRateLimit(
           then now() else ${linkRateLimits.windowStart} end`,
       },
     })
-    .returning({ count: linkRateLimits.count });
+    .returning({
+      count: linkRateLimits.count,
+      resetMs: sql<number>`(extract(epoch from (${linkRateLimits.windowStart}
+        + (${windowMs} || ' milliseconds')::interval - now())) * 1000)::float8`,
+    });
 
-  return (row?.count ?? 1) <= max;
+  const count = row?.count ?? 1;
+  const resetMs = Math.max(0, Math.min(windowMs, Number(row?.resetMs ?? windowMs)));
+  return {
+    allowed: count <= max,
+    remaining: Math.max(0, max - count),
+    retryAfterSeconds: Math.max(1, Math.ceil(resetMs / 1000)),
+  };
+}
+
+/** @returns true when the request is allowed, false when the limit is exceeded. */
+export async function checkRateLimit(
+  key: string,
+  max: number,
+  windowMs: number,
+): Promise<boolean> {
+  return (await consumeRateLimit(key, max, windowMs)).allowed;
+}
+
+/** Remove windows idle for a day. Every limiter here uses windows under a day. */
+export async function pruneRateLimits(now = new Date()): Promise<number> {
+  const rows = await db
+    .delete(linkRateLimits)
+    .where(lt(linkRateLimits.windowStart, new Date(now.getTime() - 86_400_000)))
+    .returning({ key: linkRateLimits.key });
+  return rows.length;
 }

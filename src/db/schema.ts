@@ -932,22 +932,35 @@ export const deletionTasks = pgTable(
     attempts: integer("attempts").notNull().default(0),
     availableAt: timestamp("available_at").notNull().defaultNow(),
     lastError: text("last_error"),
+    // The purge or erasure that queued this object, so its completion record
+    // can move to cleanup-finished once every linked task is done.
+    erasureId: uuid("erasure_id").references(() => erasureRecords.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     completedAt: timestamp("completed_at"),
   },
-  (t) => [index("deletion_tasks_state_idx").on(t.state, t.availableAt)],
+  (t) => [
+    index("deletion_tasks_state_idx").on(t.state, t.availableAt),
+    index("deletion_tasks_erasure_idx").on(t.erasureId),
+  ],
 );
 
-export const erasureRecords = pgTable("erasure_records", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  subjectType: text("subject_type").notNull(),
-  subjectId: text("subject_id").notNull(),
-  accessRevokedAt: timestamp("access_revoked_at"),
-  keysShreddedAt: timestamp("keys_shredded_at"),
-  cleanupPendingAt: timestamp("cleanup_pending_at"),
-  cleanupFinishedAt: timestamp("cleanup_finished_at"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+// Metadata-only progress record for a submission purge or account erasure.
+// Holds ids and timestamps, never the content being deleted.
+export const erasureRecords = pgTable(
+  "erasure_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    subjectType: text("subject_type").notNull(),
+    subjectId: text("subject_id").notNull(),
+    accessRevokedAt: timestamp("access_revoked_at"),
+    keysShreddedAt: timestamp("keys_shredded_at"),
+    cleanupPendingAt: timestamp("cleanup_pending_at"),
+    cleanupFinishedAt: timestamp("cleanup_finished_at"),
+    objectsQueued: integer("objects_queued").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("erasure_records_subject_idx").on(t.subjectType, t.subjectId)],
+);
 
 export const documentMigrations = pgTable(
   "document_migrations",
@@ -958,7 +971,10 @@ export const documentMigrations = pgTable(
     oldStorageKey: text("old_storage_key").notNull(),
     newStorageKey: text("new_storage_key").notNull(),
     dekId: uuid("dek_id").references(() => dataKeys.id),
+    // uploading -> done, or failed (original left in place).
     state: text("state").notNull().default("uploaded"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },

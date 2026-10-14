@@ -5,7 +5,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { apiKeys, memberships, organisations, user } from "@/db/schema";
-import { requireOrgUser, getSession, requestMeta } from "@/lib/guards";
+import { getSession, requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { ASSIGNABLE_ROLES, type OrgRole } from "@/lib/rbac";
 import {
@@ -18,6 +18,7 @@ import { getLogger } from "@/lib/logger";
 import { readEnrollmentKey } from "@/lib/vault-enrollment";
 import { insertVaultKey } from "@/lib/vault-store";
 import { establishVaultUnlock } from "@/lib/vault-session";
+import { isPlatformBootstrapped } from "@/lib/platform-bootstrap";
 
 const log = getLogger("org");
 
@@ -38,6 +39,11 @@ export async function createOrganisation(formData: FormData): Promise<ActionResu
   }
   if (!(session.user as { emailVerified?: boolean }).emailVerified) {
     return { ok: false, error: "Verify your email address before continuing." };
+  }
+  // Ordinary organisation creation is closed until the operator-held
+  // bootstrap completes, so it can never be used to claim the installation.
+  if (!(await isPlatformBootstrapped())) {
+    return { ok: false, error: "Recruvault setup has not been completed." };
   }
 
   const name = String(formData.get("name") ?? "").trim();
@@ -96,7 +102,7 @@ export async function createOrganisation(formData: FormData): Promise<ActionResu
 
 /** Add an existing org-side user to the organisation with a role. */
 export async function addMember(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireOrgUser("users:manage");
+  const ctx = await requireUnlockedOrg("users:manage");
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const role = String(formData.get("role") ?? "") as OrgRole;
 
@@ -144,7 +150,7 @@ export async function addMember(formData: FormData): Promise<ActionResult> {
 }
 
 export async function updateMemberRole(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireOrgUser("users:manage");
+  const ctx = await requireUnlockedOrg("users:manage");
   const membershipId = String(formData.get("membershipId") ?? "");
   const role = String(formData.get("role") ?? "") as OrgRole;
   if (!ASSIGNABLE_ROLES.includes(role)) return { ok: false, error: "Invalid role." };
@@ -174,7 +180,7 @@ export async function updateMemberRole(formData: FormData): Promise<ActionResult
 }
 
 export async function removeMember(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireOrgUser("users:manage");
+  const ctx = await requireEnrolledOrg("users:manage");
   const membershipId = String(formData.get("membershipId") ?? "");
 
   const [m] = await db
@@ -184,11 +190,15 @@ export async function removeMember(formData: FormData): Promise<ActionResult> {
   if (!m) return { ok: false, error: "Membership not found." };
   if (m.role === "owner") return { ok: false, error: "The owner cannot be removed." };
 
-  await db.delete(memberships).where(eq(memberships.id, membershipId));
-  await db
-    .update(apiKeys)
-    .set({ revokedAt: new Date() })
-    .where(and(eq(apiKeys.orgId, ctx.orgId), eq(apiKeys.userId, m.userId), isNull(apiKeys.revokedAt)));
+  // Membership removal and key revocation commit together, so no window
+  // exists where the member is gone but their keys still look active.
+  await db.transaction(async (tx) => {
+    await tx.delete(memberships).where(eq(memberships.id, membershipId));
+    await tx
+      .update(apiKeys)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(apiKeys.orgId, ctx.orgId), eq(apiKeys.userId, m.userId), isNull(apiKeys.revokedAt)));
+  });
 
   const meta = await requestMeta();
   await audit({
@@ -206,7 +216,7 @@ export async function removeMember(formData: FormData): Promise<ActionResult> {
 }
 
 export async function updateOrgSettings(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireOrgUser("retention:manage");
+  const ctx = await requireUnlockedOrg("retention:manage");
 
   const retentionDays = Number(formData.get("retentionDays") ?? 90);
   if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) {
@@ -276,7 +286,7 @@ export async function updateOrgSettings(formData: FormData): Promise<ActionResul
  * pending/failed status leaves the org on the shared domain.
  */
 export async function verifyDomain(): Promise<ActionResult> {
-  const ctx = await requireOrgUser("retention:manage");
+  const ctx = await requireUnlockedOrg("retention:manage");
 
   const [org] = await db
     .select()

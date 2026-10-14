@@ -85,6 +85,13 @@
       "when": 1791956090720,
       "tag": "0011_encrypted_r2_backups",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791966860693,
+      "tag": "0012_document_erasure_lifecycle",
+      "breakpoints": true
     }
   ]
 }

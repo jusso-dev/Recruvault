@@ -17,9 +17,10 @@ import { insertWrappedDataKey, unwrapDataKeyRow, type KeyMaterial, type WrapSpec
 
 type InsertExecutor = Pick<typeof db, "insert">;
 
+/** The wrap is always explicit so no caller silently falls back to LOCAL_KEK. */
 export async function createDataKey(
-  executor: InsertExecutor = db,
-  wrap: WrapSpec = { mode: "legacy" },
+  executor: InsertExecutor,
+  wrap: WrapSpec,
 ): Promise<{ dekId: string; dek: Buffer }> {
   const dek = randomBytes(32);
   const dekId = randomUUID();
@@ -46,16 +47,17 @@ export async function getDataKey(dekId: string, material?: KeyMaterial): Promise
 
 type Executor = Pick<typeof db, "update">;
 
+/** Destroy every wrap of a data key, including the LOCAL_KEK render delegation. */
 export async function shredDataKey(dekId: string, executor: Executor = db): Promise<void> {
   await executor
     .update(dataKeys)
-    .set({ wrappedKey: null, shreddedAt: new Date() })
+    .set({ wrappedKey: null, renderWrapped: null, shreddedAt: new Date() })
     .where(eq(dataKeys.id, dekId));
 }
 
 export async function encryptField(
   plaintext: string,
-  wrap: WrapSpec = { mode: "legacy" },
+  wrap: WrapSpec,
 ): Promise<{ valueEncrypted: string; dekId: string }> {
   const { dekId, dek } = await createDataKey(db, wrap);
   return { valueEncrypted: aesEncrypt(dek, Buffer.from(plaintext, "utf8")), dekId };

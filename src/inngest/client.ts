@@ -3,13 +3,19 @@ import { z } from "zod";
 
 /**
  * Typed event catalogue. Each event has a zod schema used for both
- * compile-time typing (via `sendEvent`) and runtime validation (via
- * `parseEvent` in handlers), replacing the previous `as` casts.
+ * compile-time typing (via `enqueueEvent` in lib/outbox) and runtime
+ * validation (via `parseEvent` in handlers). Payloads carry ids only: no
+ * contact details, links, or key material. Events are published only through
+ * the transactional outbox, so there is no direct send helper here.
  */
 export const eventSchemas = {
   "request/send": z.object({
     requestId: z.string().uuid(),
-    recipientEmail: z.string().email(),
+    // The queued delivery row holds the recipient. Rows enqueued before this
+    // change carry recipientEmail/recipientPhone instead; the consumer turns
+    // them into a delivery row first.
+    deliveryId: z.string().uuid().optional(),
+    recipientEmail: z.string().email().optional(),
     recipientPhone: z.string().optional(),
     sentBy: z.string(),
   }),
@@ -17,6 +23,8 @@ export const eventSchemas = {
     documentId: z.string().uuid(),
     table: z.enum(["documents", "wallet_documents"]),
   }),
+  // Legacy: the Resend webhook now updates suppressions in its own
+  // transaction. Kept so rows queued before that change still drain.
   "email/event": z.object({
     type: z.string(),
     email: z.string(),
@@ -40,16 +48,6 @@ export type EventName = keyof typeof eventSchemas;
 export type EventData<K extends EventName> = z.infer<(typeof eventSchemas)[K]>;
 
 export const inngest = new Inngest({ id: "recruvault" });
-
-/** Type-checked event send. Payload shape is enforced at the call site. */
-export function sendEvent<K extends EventName>(name: K, data: EventData<K>) {
-  return inngest.send({ name, data });
-}
-
-/** Type-checked batch send for a single event type. */
-export function sendEvents<K extends EventName>(name: K, items: EventData<K>[]) {
-  return inngest.send(items.map((data) => ({ name, data })));
-}
 
 /** Runtime-validate + type a handler's event payload. */
 export function parseEvent<K extends EventName>(name: K, data: unknown): EventData<K> {

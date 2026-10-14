@@ -1,9 +1,11 @@
 "use server";
 
-import { and, eq, isNull, gt } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
+import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { apiKeys, candidateApiKeys } from "@/db/schema";
+import { auth } from "@/lib/auth";
 import { getSession, requireCandidate, requireOrgUser, requestMeta } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { generateOpaqueToken, sha256 } from "@/lib/crypto";
@@ -12,12 +14,12 @@ import {
   CANDIDATE_API_SCOPES,
   DEFAULT_KEY_TTL_DAYS,
   keyExpiry,
-  MAX_ACTIVE_KEYS,
   ORG_API_SCOPES,
   parseRequestedScopes,
   recentAuthentication,
   type ApiScope,
 } from "@/lib/api-scopes";
+import { insertCandidateApiKey, insertOrgApiKey, type NewKeyMaterial } from "@/lib/api-key-store";
 import { activeVault } from "@/lib/vault-store";
 import { readUnlockedCustomerKey } from "@/lib/vault-session";
 import { wrapForCredential } from "@/lib/vault-crypto";
@@ -26,7 +28,8 @@ import type { ActionResult } from "./org";
 /**
  * Mint an API key for the caller's organisation. The plaintext is returned
  * once and never stored (only its SHA-256 hash and a display prefix are kept).
- * The key inherits the creator's role.
+ * The key carries only the scopes explicitly selected, and every request is
+ * still held to the creator's live role.
  */
 export async function createApiKey(
   formData: FormData,
@@ -34,29 +37,18 @@ export async function createApiKey(
   const ctx = await requireOrgUser("api:manage");
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return { ok: false, error: "Give the key a name." };
-  const issued = await issueKeyMaterial(formData, ORG_API_SCOPES, "organisation", ctx.orgId, ctx.userId);
+  const issued = await issueKeyMaterial(
+    formData,
+    formData.getAll("scopes").map(String),
+    ORG_API_SCOPES,
+    "organisation",
+    ctx.orgId,
+    ctx.userId,
+  );
   if (!issued.ok) return issued;
 
-  const active = await db
-    .select({ id: apiKeys.id })
-    .from(apiKeys)
-    .where(and(eq(apiKeys.userId, ctx.userId), eq(apiKeys.orgId, ctx.orgId), isNull(apiKeys.revokedAt), gt(apiKeys.expiresAt, new Date())));
-  if (active.length >= MAX_ACTIVE_KEYS) return { ok: false, error: "Revoke an existing key before creating another." };
-
-  const [row] = await db
-    .insert(apiKeys)
-    .values({
-      orgId: ctx.orgId,
-      userId: ctx.userId,
-      name,
-      keyHash: sha256(issued.key),
-      prefix: issued.key.slice(0, 11),
-      scopes: issued.scopes,
-      expiresAt: issued.expiresAt,
-      vaultKeyId: issued.vaultKeyId,
-      wrappedVaultKey: issued.wrappedVaultKey,
-    })
-    .returning({ id: apiKeys.id });
+  const inserted = await insertOrgApiKey({ orgId: ctx.orgId, userId: ctx.userId }, { name, ...issued.material });
+  if (!inserted.ok) return inserted;
 
   const meta = await requestMeta();
   await audit({
@@ -65,13 +57,59 @@ export async function createApiKey(
     actorId: ctx.userId,
     action: "api_key.created",
     targetType: "api_key",
-    targetId: row.id,
+    targetId: inserted.id,
     ...meta,
   });
 
   revalidatePath("/dashboard/settings");
   revalidatePath("/dashboard/integrations");
-  return { ok: true, id: row.id, key: issued.key };
+  return { ok: true, id: inserted.id, key: issued.key };
+}
+
+/**
+ * Replace one of the caller's own keys: same name and scopes, a new secret and
+ * expiry. The old key is revoked in the same transaction.
+ */
+export async function rotateApiKey(
+  formData: FormData,
+): Promise<ActionResult & { key?: string }> {
+  const ctx = await requireOrgUser("api:manage");
+  const keyId = String(formData.get("keyId") ?? "");
+  const [old] = await db
+    .select({ name: apiKeys.name, scopes: apiKeys.scopes })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(apiKeys.id, keyId),
+        eq(apiKeys.orgId, ctx.orgId),
+        eq(apiKeys.userId, ctx.userId),
+        isNull(apiKeys.revokedAt),
+      ),
+    );
+  if (!old) return { ok: false, error: "Key not found." };
+  const issued = await issueKeyMaterial(formData, old.scopes, ORG_API_SCOPES, "organisation", ctx.orgId, ctx.userId);
+  if (!issued.ok) return issued;
+
+  const inserted = await insertOrgApiKey(
+    { orgId: ctx.orgId, userId: ctx.userId },
+    { name: old.name, ...issued.material },
+    keyId,
+  );
+  if (!inserted.ok) return inserted;
+
+  const meta = await requestMeta();
+  await audit({
+    orgId: ctx.orgId,
+    actorType: "org_user",
+    actorId: ctx.userId,
+    action: "api_key.rotated",
+    targetType: "api_key",
+    targetId: inserted.id,
+    ...meta,
+  });
+  revalidatePath("/dashboard/settings");
+  revalidatePath("/dashboard/integrations");
+  return { ok: true, id: inserted.id, key: issued.key };
 }
 
 /** Revoke an API key (tenant-scoped). */
@@ -117,34 +155,18 @@ export async function createCandidateApiKey(
   const ctx = await requireCandidate();
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return { ok: false, error: "Give the key a name." };
-  const issued = await issueKeyMaterial(formData, CANDIDATE_API_SCOPES, "candidate", ctx.candidateAccountId, ctx.userId);
+  const issued = await issueKeyMaterial(
+    formData,
+    formData.getAll("scopes").map(String),
+    CANDIDATE_API_SCOPES,
+    "candidate",
+    ctx.candidateAccountId,
+    ctx.userId,
+  );
   if (!issued.ok) return issued;
 
-  const active = await db
-    .select({ id: candidateApiKeys.id })
-    .from(candidateApiKeys)
-    .where(
-      and(
-        eq(candidateApiKeys.candidateAccountId, ctx.candidateAccountId),
-        isNull(candidateApiKeys.revokedAt),
-        gt(candidateApiKeys.expiresAt, new Date()),
-      ),
-    );
-  if (active.length >= MAX_ACTIVE_KEYS) return { ok: false, error: "Revoke an existing key before creating another." };
-
-  const [row] = await db
-    .insert(candidateApiKeys)
-    .values({
-      candidateAccountId: ctx.candidateAccountId,
-      name,
-      keyHash: sha256(issued.key),
-      prefix: issued.key.slice(0, 11),
-      scopes: issued.scopes,
-      expiresAt: issued.expiresAt,
-      vaultKeyId: issued.vaultKeyId,
-      wrappedVaultKey: issued.wrappedVaultKey,
-    })
-    .returning({ id: candidateApiKeys.id });
+  const inserted = await insertCandidateApiKey(ctx.candidateAccountId, { name, ...issued.material });
+  if (!inserted.ok) return inserted;
 
   const meta = await requestMeta();
   await audit({
@@ -152,43 +174,98 @@ export async function createCandidateApiKey(
     actorId: ctx.candidateAccountId,
     action: "candidate_api_key.created",
     targetType: "candidate_api_key",
-    targetId: row.id,
+    targetId: inserted.id,
     ...meta,
   });
   revalidatePath("/integrations");
-  return { ok: true, id: row.id, key: issued.key };
+  return { ok: true, id: inserted.id, key: issued.key };
+}
+
+/** Replace one of the job seeker's own keys, revoking the old one atomically. */
+export async function rotateCandidateApiKey(
+  formData: FormData,
+): Promise<ActionResult & { key?: string }> {
+  const ctx = await requireCandidate();
+  const keyId = String(formData.get("keyId") ?? "");
+  const [old] = await db
+    .select({ name: candidateApiKeys.name, scopes: candidateApiKeys.scopes })
+    .from(candidateApiKeys)
+    .where(
+      and(
+        eq(candidateApiKeys.id, keyId),
+        eq(candidateApiKeys.candidateAccountId, ctx.candidateAccountId),
+        isNull(candidateApiKeys.revokedAt),
+      ),
+    );
+  if (!old) return { ok: false, error: "Key not found." };
+  const issued = await issueKeyMaterial(
+    formData,
+    old.scopes,
+    CANDIDATE_API_SCOPES,
+    "candidate",
+    ctx.candidateAccountId,
+    ctx.userId,
+  );
+  if (!issued.ok) return issued;
+
+  const inserted = await insertCandidateApiKey(
+    ctx.candidateAccountId,
+    { name: old.name, ...issued.material },
+    keyId,
+  );
+  if (!inserted.ok) return inserted;
+
+  const meta = await requestMeta();
+  await audit({
+    actorType: "candidate",
+    actorId: ctx.candidateAccountId,
+    action: "candidate_api_key.rotated",
+    targetType: "candidate_api_key",
+    targetId: inserted.id,
+    ...meta,
+  });
+  revalidatePath("/integrations");
+  return { ok: true, id: inserted.id, key: issued.key };
+}
+
+/**
+ * Recent authentication: the session must be under 15 minutes old, or the
+ * caller re-enters their password. Passwordless accounts sign in again.
+ */
+async function confirmRecentAuth(formData: FormData, userId: string): Promise<string | null> {
+  const authSession = await getSession();
+  if (!authSession || authSession.user.id !== userId) return "Sign in again before managing API keys.";
+  if (recentAuthentication(authSession.session.createdAt)) return null;
+  const password = String(formData.get("password") ?? "");
+  if (!password) return "Enter your password, or sign in again, before managing API keys.";
+  try {
+    await auth.api.verifyPassword({ body: { password }, headers: await headers() });
+    return null;
+  } catch {
+    return "That password is not correct.";
+  }
 }
 
 async function issueKeyMaterial(
   formData: FormData,
+  requested: string[],
   allowed: readonly ApiScope[],
   ownerType: "organisation" | "candidate",
   ownerId: string,
   userId: string,
 ): Promise<
-  | {
-      ok: true;
-      key: string;
-      scopes: string[];
-      expiresAt: Date;
-      vaultKeyId: string;
-      wrappedVaultKey: string;
-    }
+  | { ok: true; key: string; material: Omit<NewKeyMaterial, "name"> }
   | { ok: false; error: string }
 > {
-  const requested = formData.getAll("scopes").map(String);
-  const scopes = parseRequestedScopes(
-    requested.length > 0 ? requested : [...allowed],
-    allowed,
-  );
+  // No implicit default: an empty selection is rejected, and legacy:full
+  // keys cannot be re-issued or rotated into a new key.
+  const scopes = parseRequestedScopes(requested, allowed);
   if (!scopes.ok) return scopes;
   const expiresAt = keyExpiry(Number(formData.get("ttlDays") ?? DEFAULT_KEY_TTL_DAYS));
   if (!expiresAt) return { ok: false, error: "Choose an expiry between 1 and 365 days." };
 
-  const authSession = await getSession();
-  if (!authSession || authSession.user.id !== userId || !recentAuthentication(authSession.session.createdAt)) {
-    return { ok: false, error: "Sign in again before creating an API key." };
-  }
+  const authError = await confirmRecentAuth(formData, userId);
+  if (authError) return { ok: false, error: authError };
   const crk = await readUnlockedCustomerKey(ownerType, ownerId);
   const vault = await activeVault(ownerType, ownerId);
   if (!crk || !vault) return { ok: false, error: "Unlock the encryption key before creating an API key." };
@@ -198,10 +275,14 @@ async function issueKeyMaterial(
   return {
     ok: true,
     key,
-    scopes: scopes.scopes,
-    expiresAt,
-    vaultKeyId: vault.id,
-    wrappedVaultKey: wrapForCredential(key, crk),
+    material: {
+      keyHash: sha256(key),
+      prefix: key.slice(0, 11),
+      scopes: scopes.scopes,
+      expiresAt,
+      vaultKeyId: vault.id,
+      wrappedVaultKey: wrapForCredential(key, crk),
+    },
   };
 }
 

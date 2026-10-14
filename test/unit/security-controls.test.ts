@@ -81,14 +81,18 @@ describe("enrollment form", () => {
 describe("production environment", () => {
   const base = {
     NODE_ENV: "production",
+    APP_URL: "https://vault.example.org",
     DATABASE_URL: "postgres://app:unique-secret@db:5432/recruvault",
-    BETTER_AUTH_SECRET: "x".repeat(32),
-    LOCAL_KEK: "ab".repeat(32),
+    BETTER_AUTH_SECRET: "3f9c1a7e5b2d8046c9e1f3a5b7d90c2e4f6a8b0c1d3e5f7091a2b3c4d5e6f708",
+    LOCAL_KEK: "9a8b7c6d5e4f30211f2e3d4c5b6a79880a1b2c3d4e5f60718293a4b5c6d7e8f9",
     S3_BUCKET: "records",
     AWS_ACCESS_KEY_ID: "real-access-key",
     AWS_SECRET_ACCESS_KEY: "real-secret-key",
-    BOOTSTRAP_TOKEN: "b".repeat(32),
+    BOOTSTRAP_TOKEN: "c4e6a8f0b2d4167389ab01cd23ef4567fedcba9876543210a1b2c3d4e5f60718",
     INNGEST_SIGNING_KEY: "sign",
+    INNGEST_EVENT_KEY: "event",
+    RESEND_API_KEY: "re_live_key",
+    RESEND_FROM_EMAIL: "vault@example.org",
   };
 
   it("rejects default credentials, the dev job server, and the test mailbox", () => {
@@ -98,5 +102,14 @@ describe("production environment", () => {
     expect(parseEnv({ ...base, PLAYWRIGHT_TEST: "1" }).success).toBe(false);
     expect(parseEnv({ ...base, SCAN_DISABLED: "true" }).success).toBe(false);
     expect(parseEnv(base).success).toBe(true);
+  });
+
+  it("rejects placeholder, reused, or missing deployment secrets", () => {
+    expect(parseEnv({ ...base, LOCAL_KEK: "00".repeat(32) }).success).toBe(false);
+    expect(parseEnv({ ...base, BETTER_AUTH_SECRET: "ci-placeholder-secret-at-least-32-chars" }).success).toBe(false);
+    expect(parseEnv({ ...base, BOOTSTRAP_TOKEN: base.BETTER_AUTH_SECRET }).success).toBe(false);
+    expect(parseEnv({ ...base, RESEND_API_KEY: undefined }).success).toBe(false);
+    expect(parseEnv({ ...base, INNGEST_EVENT_KEY: undefined }).success).toBe(false);
+    expect(parseEnv({ ...base, APP_URL: "http://vault.example.org" }).success).toBe(false);
   });
 });

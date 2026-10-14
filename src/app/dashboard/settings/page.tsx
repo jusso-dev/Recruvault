@@ -53,6 +53,8 @@ export default async function SettingsPage() {
           id: apiKeys.id,
           name: apiKeys.name,
           prefix: apiKeys.prefix,
+          scopes: apiKeys.scopes,
+          expiresAt: apiKeys.expiresAt,
           lastUsedAt: apiKeys.lastUsedAt,
           createdAt: apiKeys.createdAt,
         })

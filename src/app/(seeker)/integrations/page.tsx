@@ -11,6 +11,8 @@ export default async function CandidateIntegrationsPage() {
       id: candidateApiKeys.id,
       name: candidateApiKeys.name,
       prefix: candidateApiKeys.prefix,
+      scopes: candidateApiKeys.scopes,
+      expiresAt: candidateApiKeys.expiresAt,
       lastUsedAt: candidateApiKeys.lastUsedAt,
       createdAt: candidateApiKeys.createdAt,
     })

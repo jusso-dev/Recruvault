@@ -16,12 +16,13 @@ import {
   submissions,
   suppressions,
 } from "@/db/schema";
-import { requireOrgUser, requestMeta } from "@/lib/guards";
+import { requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "@/lib/guards";
 import { audit } from "@/lib/audit";
-import { emitEvent, enqueueEvent, publishPendingOutbox } from "@/lib/outbox";
+import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
+import { queueRequestDelivery } from "@/lib/requests-service";
 import { activeVault } from "@/lib/vault-store";
 import { readUnlockedCustomerKey } from "@/lib/vault-session";
-import { protectDocument, putProtectedObject } from "@/lib/document-protect";
+import { discardProtectedUploads, protectDocument, putProtectedObject } from "@/lib/document-protect";
 import {
   fieldDefinition,
   JD_ALLOWED_TYPES,
@@ -42,7 +43,7 @@ import type { ActionResult } from "./org";
  * and listed/private visibility.
  */
 export async function createRequest(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireOrgUser("requests:create");
+  const ctx = await requireUnlockedOrg("requests:create");
   const meta = await requestMeta();
 
   const title = String(formData.get("title") ?? "").trim();
@@ -108,6 +109,9 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
 
   // Optional JD upload, stored encrypted and scanned before it can be viewed.
   let jdDocumentId: string | null = null;
+  let jdUpload:
+    | { storageKey: string; ciphertext: Buffer; dekId: string; row: typeof documents.$inferInsert & { id: string } }
+    | undefined;
   const jd = formData.get("jd");
   if (jd instanceof File && jd.size > 0) {
     if (jd.size > UPLOAD_MAX_BYTES) return { ok: false, error: "JD exceeds 15 MB." };
@@ -130,97 +134,125 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
       scope: "org",
     });
     if (!prepared.ok) return prepared;
-    await putProtectedObject(prepared.storageKey, prepared.ciphertext);
-    const [doc] = await db.transaction(async (tx) => {
+    jdUpload = {
+      storageKey: prepared.storageKey,
+      ciphertext: prepared.ciphertext,
+      dekId: prepared.dekId,
+      row: {
+        id: prepared.documentId,
+        orgId: ctx.orgId,
+        kind: "jd",
+        fileName: jd.name,
+        contentType: "application/octet-stream",
+        originalContentType: sniffed,
+        sizeBytes: jd.size,
+        storageKey: prepared.storageKey,
+        checksum: createHash("sha256").update(bytes).digest("hex"),
+        dekId: prepared.dekId,
+        envelopeVersion: prepared.envelopeVersion,
+        scanStatus: "clean",
+      },
+    };
+    jdDocumentId = prepared.documentId;
+  }
+
+  // The JD document, the request that points at it, and their events commit
+  // together. If the upload or the transaction fails, the JD's key is shredded
+  // and its object queued for durable deletion.
+  let request: { id: string };
+  try {
+    if (jdUpload) await putProtectedObject(jdUpload.storageKey, jdUpload.ciphertext);
+    request = await db.transaction(async (tx) => {
+      if (jdUpload) {
+        await tx.insert(documents).values(jdUpload.row);
+        await enqueueEvent(
+          tx,
+          "document/uploaded",
+          { documentId: jdUpload.row.id, table: "documents" },
+          `document/uploaded:documents:${jdUpload.row.id}`,
+          ctx.orgId,
+        );
+      }
       const [inserted] = await tx
-        .insert(documents)
+        .insert(requests)
         .values({
-          id: prepared.documentId,
           orgId: ctx.orgId,
-          kind: "jd",
-          fileName: jd.name,
-          contentType: "application/octet-stream",
-          originalContentType: sniffed,
-          sizeBytes: jd.size,
-          storageKey: prepared.storageKey,
-          checksum: createHash("sha256").update(bytes).digest("hex"),
-          dekId: prepared.dekId,
-          envelopeVersion: 1,
-          scanStatus: "clean",
+          createdBy: ctx.userId,
+          title,
+          description,
+          location,
+          employmentType,
+          workArrangement,
+          salaryMin,
+          salaryMax,
+          salaryPeriod,
+          skills,
+          status: "open",
+          listed,
+          expiresAt,
+          consentRequired: true,
+          consentPurpose,
+          jdDocumentId,
+          jdViewMode,
         })
-        .returning({ id: documents.id });
-      await enqueueEvent(
-        tx,
-        "document/uploaded",
-        { documentId: inserted.id, table: "documents" },
-        `document/uploaded:documents:${inserted.id}`,
+        .returning({ id: requests.id });
+
+      let sortOrder = 0;
+      for (const key of libraryKeys) {
+        const def = fieldDefinition(key);
+        if (!def) continue;
+        await tx.insert(requestFields).values({
+          requestId: inserted.id,
+          key: def.key,
+          type: def.type,
+          label: def.label,
+          helpText: def.helpText,
+          required: true,
+          sensitive: def.sensitive,
+          sortOrder: sortOrder++,
+        });
+      }
+      if (formData.get("saveAsTemplate") === "on") {
+        await tx.insert(requestTemplates).values({
+          orgId: ctx.orgId,
+          name: title,
+          createdBy: ctx.userId,
+          definition: {
+            title,
+            description,
+            location,
+            employmentType,
+            workArrangement,
+            salaryMin,
+            salaryMax,
+            salaryPeriod,
+            skills,
+            libraryKeys,
+            customLabels,
+            jdViewMode,
+          },
+        });
+      }
+
+      if (listed && skills.length > 0) {
+        await enqueueEvent(
+          tx,
+          "job-alert/role-listed",
+          { requestId: inserted.id },
+          `job-alert/role-listed:${inserted.id}:created`,
+          ctx.orgId,
+        );
+      }
+      return inserted;
+    });
+  } catch (err) {
+    if (jdUpload) {
+      await discardProtectedUploads(
+        [{ storageKey: jdUpload.storageKey, dekId: jdUpload.dekId }],
         ctx.orgId,
       );
-      return [inserted];
-    });
-    jdDocumentId = doc.id;
-    await publishPendingOutbox();
-  }
-
-  const [request] = await db
-    .insert(requests)
-    .values({
-      orgId: ctx.orgId,
-      createdBy: ctx.userId,
-      title,
-      description,
-      location,
-      employmentType,
-      workArrangement,
-      salaryMin,
-      salaryMax,
-      salaryPeriod,
-      skills,
-      status: "open",
-      listed,
-      expiresAt,
-      consentRequired: true,
-      consentPurpose,
-      jdDocumentId,
-      jdViewMode,
-    })
-    .returning({ id: requests.id });
-
-  let sortOrder = 0;
-  for (const key of libraryKeys) {
-    const def = fieldDefinition(key);
-    if (!def) continue;
-    await db.insert(requestFields).values({
-      requestId: request.id,
-      key: def.key,
-      type: def.type,
-      label: def.label,
-      helpText: def.helpText,
-      required: true,
-      sensitive: def.sensitive,
-      sortOrder: sortOrder++,
-    });
-  }
-  if (formData.get("saveAsTemplate") === "on") {
-    await db.insert(requestTemplates).values({
-      orgId: ctx.orgId,
-      name: title,
-      createdBy: ctx.userId,
-      definition: {
-        title,
-        description,
-        location,
-        employmentType,
-        workArrangement,
-        salaryMin,
-        salaryMax,
-        salaryPeriod,
-        skills,
-        libraryKeys,
-        customLabels,
-        jdViewMode,
-      },
-    });
+    }
+    throw err;
   }
 
   await audit({
@@ -233,9 +265,7 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
     ...meta,
   });
 
-  if (listed && skills.length > 0) {
-    await emitEvent("job-alert/role-listed", { requestId: request.id }, `job-alert/role-listed:${request.id}`, ctx.orgId);
-  }
+  await publishAfterCommit();
 
   revalidatePath("/dashboard");
   return { ok: true, id: request.id };
@@ -243,7 +273,7 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
 
 /** Delete a saved request template. Tenant-scoped and gated by templates:manage. */
 export async function deleteTemplate(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireOrgUser("templates:manage");
+  const ctx = await requireEnrolledOrg("templates:manage");
   const templateId = String(formData.get("templateId") ?? "");
   if (!templateId) return { ok: false, error: "Missing template id." };
 
@@ -270,7 +300,7 @@ export async function deleteTemplate(formData: FormData): Promise<ActionResult> 
 
 /** Queue delivery of a secure link by email (and optionally SMS). */
 export async function sendRequest(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireOrgUser("requests:create");
+  const ctx = await requireUnlockedOrg("requests:create");
   const requestId = String(formData.get("requestId") ?? "");
   const recipientEmail = String(formData.get("recipientEmail") ?? "").trim().toLowerCase();
   const recipientPhone = String(formData.get("recipientPhone") ?? "").trim() || undefined;
@@ -302,12 +332,15 @@ export async function sendRequest(formData: FormData): Promise<ActionResult> {
     };
   }
 
-  await emitEvent(
-    "request/send",
-    { requestId, recipientEmail, recipientPhone, sentBy: ctx.userId },
-    `request/send:${requestId}:${recipientEmail.toLowerCase()}`,
-    ctx.orgId,
-  );
+  const meta = await requestMeta();
+  await queueRequestDelivery({
+    orgId: ctx.orgId,
+    sentBy: ctx.userId,
+    request,
+    recipientEmail,
+    recipientPhone,
+    ...meta,
+  });
 
   revalidatePath(`/dashboard/requests/${requestId}`);
   return { ok: true };
@@ -315,7 +348,7 @@ export async function sendRequest(formData: FormData): Promise<ActionResult> {
 
 /** Revoke a sent secure link before it expires or is used. */
 export async function revokeAccessToken(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireOrgUser("requests:create");
+  const ctx = await requireEnrolledOrg("requests:create");
   const accessTokenId = String(formData.get("accessTokenId") ?? "");
 
   const [row] = await db
@@ -352,7 +385,7 @@ export async function revokeAccessToken(formData: FormData): Promise<ActionResul
 }
 
 export async function setRequestStatus(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireOrgUser("requests:create");
+  const ctx = await requireUnlockedOrg("requests:create");
   const requestId = String(formData.get("requestId") ?? "");
   const status = String(formData.get("status") ?? "");
   if (!["open", "closing_soon", "closed", "archived"].includes(status)) {
@@ -390,7 +423,7 @@ export async function setRequestStatus(formData: FormData): Promise<ActionResult
 
 /** Share a submission with a reviewer (read-only, shared-only access). */
 export async function shareSubmission(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireOrgUser("requests:create");
+  const ctx = await requireUnlockedOrg("requests:create");
   const submissionId = String(formData.get("submissionId") ?? "");
   const userId = String(formData.get("userId") ?? "");
 

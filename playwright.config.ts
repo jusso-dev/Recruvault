@@ -35,7 +35,9 @@ export default defineConfig({
     {
       name: "Recruvault",
       command: `npm run dev -- --hostname ${serverHostname} --port ${serverPort}`,
-      url: baseURL,
+      // Liveness, not "/": the server starts before global setup migrates a
+      // fresh database, and pages query the schema.
+      url: `${baseURL}/api/live`,
       timeout: 120_000,
       reuseExistingServer: false,
       env: {

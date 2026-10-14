@@ -3,15 +3,35 @@
  * plain object (no build-time generation) so it stays dependency-light and is
  * served verbatim at /api/v1/openapi.json.
  */
+import type { ApiScope } from "@/lib/api-scopes";
+
+// Scope each operation requires. A key must hold the scope, and the creator's
+// live role must allow the action.
+const OPERATION_SCOPES: Record<string, ApiScope | null> = {
+  "get /requests": "roles:read",
+  "post /requests": "roles:write",
+  "get /requests/{id}": "roles:read",
+  "post /requests/{id}/jd": "jd:write",
+  "get /requests/{id}/submissions": "submissions:read",
+  "post /requests/{id}/send": "invitations:send",
+  "get /reports/recruiter": "reports:read",
+  "post /match": "match:read",
+  "get /me/applications": "applications:read",
+  "get /me/documents": "documents:read",
+  "get /me/profile": "profile:read",
+  "patch /me/profile": "profile:write",
+  "get /me/key": null,
+};
+
 export function buildOpenApiSpec() {
   const appUrl = process.env.APP_URL ?? "http://localhost:3000";
-  return {
+  return withAccessControl({
     openapi: "3.1.0",
     info: {
       title: "Recruvault API",
       version: "1.0.0",
       description:
-        "Programmatic access for recruiters and job seekers. Keys are bearer tokens with explicit scopes and an expiry. A key cannot exceed the caller's live role, and a locked vault cannot be bypassed. Organisation keys manage roles and candidate workflows; job-seeker keys access only the owner's applications, career-document metadata, and discovery profile.",
+        "Programmatic access for recruiters and job seekers. Keys are bearer tokens with explicit scopes and an expiry. A key cannot exceed the caller's live role, and a locked vault cannot be bypassed. Organisation keys manage roles and candidate workflows; job-seeker keys access only the owner's applications, career-document metadata, and discovery profile. Each operation lists its required scope in `x-required-scopes`. 401 means the key is invalid, expired, revoked, or must be replaced; 403 means a valid key lacks the scope or role, or the vault is not enrolled. Requests share per-key, per-user, per-organisation, per-IP, and per-route budgets across all instances; 429 responses carry `Retry-After` (seconds until the window resets).",
     },
     servers: [{ url: `${appUrl}/api/v1` }],
     tags: [
@@ -25,6 +45,21 @@ export function buildOpenApiSpec() {
       },
       schemas: {
         Error: { type: "object", properties: { error: { type: "string" } } },
+        RateLimited: {
+          type: "object",
+          properties: { error: { type: "string" }, retryAfterSeconds: { type: "integer" } },
+        },
+        KeyDescription: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["organisation", "candidate"] },
+            name: { type: "string" },
+            prefix: { type: "string", example: "rv_1a2b3c4d" },
+            scopes: { type: "array", items: { type: "string" } },
+            expiresAt: { type: ["string", "null"], format: "date-time" },
+            role: { type: "string", description: "Organisation keys: the creator's current role." },
+          },
+        },
         CreateRequest: {
           type: "object",
           required: ["title"],
@@ -118,6 +153,17 @@ export function buildOpenApiSpec() {
       },
     },
     paths: {
+      "/me/key": {
+        get: {
+          tags: ["Recruiter", "Job seeker"],
+          summary: "Describe the presented API key",
+          description:
+            "Returns the key's kind, scopes, and expiry so clients can offer only permitted operations. Never returns key material.",
+          responses: {
+            "200": { description: "OK", content: json({ key: ref("KeyDescription") }) },
+          },
+        },
+      },
       "/requests": {
         get: {
           tags: ["Recruiter"],
@@ -251,14 +297,45 @@ export function buildOpenApiSpec() {
         },
       },
     },
-  };
+  });
+}
+
+type Operation = {
+  responses: Record<string, unknown>;
+  security?: unknown;
+  "x-required-scopes"?: string[];
+};
+
+/** Attach required scopes and the shared 401/403/429 responses to every operation. */
+function withAccessControl<T extends { paths: Record<string, Record<string, Operation>> }>(spec: T): T {
+  for (const [path, operations] of Object.entries(spec.paths)) {
+    for (const [method, operation] of Object.entries(operations)) {
+      const scope = OPERATION_SCOPES[`${method} ${path}`];
+      operation["x-required-scopes"] = scope ? [scope] : [];
+      // OpenAPI 3.1 allows role names for non-OAuth schemes.
+      operation.security = [{ apiKey: scope ? [scope] : [] }];
+      operation.responses["401"] ??= errRef("Invalid, expired, revoked, or legacy key");
+      operation.responses["403"] ??= errRef("Missing scope, role, verification, or vault enrollment");
+      operation.responses["429"] ??= {
+        description: "Request budget exhausted",
+        headers: {
+          "Retry-After": {
+            description: "Seconds until the exhausted window resets.",
+            schema: { type: "integer" },
+          },
+        },
+        content: { "application/json": { schema: ref("RateLimited") } },
+      };
+    }
+  }
+  return spec;
 }
 
 function ref(name: string) {
   return { $ref: `#/components/schemas/${name}` };
 }
-function errRef() {
-  return { description: "Error", content: { "application/json": { schema: ref("Error") } } };
+function errRef(description = "Error") {
+  return { description, content: { "application/json": { schema: ref("Error") } } };
 }
 function idParam() {
   return { name: "id", in: "path", required: true, schema: { type: "string" } };

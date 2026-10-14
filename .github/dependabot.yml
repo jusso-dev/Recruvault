@@ -24,3 +24,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # Base images and Compose services are pinned by digest; keep them current.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly

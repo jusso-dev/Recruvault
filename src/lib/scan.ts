@@ -61,6 +61,25 @@ export async function scanBytes(bytes: Buffer): Promise<ScanResult> {
   });
 }
 
+/** Readiness probe: clamd answers PING with PONG. True when scanning is disabled in development. */
+export async function scannerReady(timeoutMs = 2_000): Promise<boolean> {
+  if (process.env.SCAN_DISABLED === "true" && process.env.NODE_ENV !== "production") return true;
+  const host = process.env.CLAMAV_HOST ?? "localhost";
+  const port = Number(process.env.CLAMAV_PORT ?? 3310);
+  return new Promise<boolean>((resolve) => {
+    const socket = new Socket();
+    let response = "";
+    socket.setTimeout(timeoutMs);
+    socket.on("timeout", () => socket.destroy());
+    socket.on("error", () => resolve(false));
+    socket.on("data", (d) => {
+      response += d.toString();
+    });
+    socket.on("close", () => resolve(response.includes("PONG")));
+    socket.connect(port, host, () => socket.write("zPING\0"));
+  });
+}
+
 /**
  * Content sniffing: verify the uploaded bytes actually match an allowed type,
  * regardless of the declared Content-Type or extension.

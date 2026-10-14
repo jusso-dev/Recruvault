@@ -7,19 +7,32 @@ import {
   createCandidateApiKey,
   revokeApiKey,
   revokeCandidateApiKey,
+  rotateApiKey,
+  rotateCandidateApiKey,
 } from "@/actions/api-keys";
 import { Button, Input } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { userFacingError } from "@/lib/user-facing-errors";
-import { CANDIDATE_API_SCOPES, ORG_API_SCOPES } from "@/lib/api-scopes";
+import {
+  CANDIDATE_API_SCOPES,
+  CANDIDATE_READ_SCOPES,
+  LEGACY_API_SCOPE,
+  ORG_API_SCOPES,
+  REPORTING_SCOPES,
+  SCOPE_DESCRIPTIONS,
+} from "@/lib/api-scopes";
 
 export interface ApiKeyRow {
   id: string;
   name: string;
   prefix: string;
+  scopes?: string[];
+  expiresAt?: Date | null;
   lastUsedAt: Date | null;
   createdAt: Date;
 }
+
+const READ_ONLY_DEFAULTS = new Set<string>([...REPORTING_SCOPES, ...CANDIDATE_READ_SCOPES]);
 
 export function ApiKeysManager({
   keys,
@@ -53,6 +66,33 @@ export function ApiKeysManager({
         showToast({
           tone: "success",
           message: "API key created. Copy it now because it won’t be shown again.",
+        });
+        router.refresh();
+      } catch (error) {
+        showToast({ tone: "error", message: userFacingError(error) });
+      }
+    });
+  }
+
+  function onRotate(id: string) {
+    const fd = new FormData();
+    fd.set("keyId", id);
+    const password = (document.getElementById("apiKeyPassword") as HTMLInputElement | null)?.value;
+    if (password) fd.set("password", password);
+    const ttl = (document.getElementById("ttlDays") as HTMLInputElement | null)?.value;
+    if (ttl) fd.set("ttlDays", ttl);
+    startTransition(async () => {
+      try {
+        const res =
+          scope === "candidate" ? await rotateCandidateApiKey(fd) : await rotateApiKey(fd);
+        if (!res.ok || !res.key) {
+          showToast({ tone: "error", message: userFacingError(res.error) });
+          return;
+        }
+        setCreated(res.key);
+        showToast({
+          tone: "success",
+          message: "Key rotated. The old key no longer works. Copy the new one now.",
         });
         router.refresh();
       } catch (error) {
@@ -105,7 +145,30 @@ export function ApiKeysManager({
                     ? `last used ${new Date(k.lastUsedAt).toLocaleDateString("en-AU")}`
                     : "never used"}
                 </span>
+                {k.expiresAt && (
+                  <span className="ml-2 text-xs text-stone-400">
+                    expires {new Date(k.expiresAt).toLocaleDateString("en-AU")}
+                  </span>
+                )}
+                {k.scopes && (
+                  <span className="block text-xs text-stone-500">
+                    {k.scopes.includes(LEGACY_API_SCOPE)
+                      ? "Legacy key: no longer accepted. Create a new scoped key and revoke this one."
+                      : k.scopes.join(", ")}
+                  </span>
+                )}
               </div>
+              {!k.scopes?.includes(LEGACY_API_SCOPE) && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onRotate(k.id)}
+                  disabled={pending}
+                >
+                  Rotate
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"
@@ -131,8 +194,14 @@ export function ApiKeysManager({
           <legend className="text-sm font-medium text-stone-700">Scopes</legend>
           {(scope === "candidate" ? CANDIDATE_API_SCOPES : ORG_API_SCOPES).map((item) => (
             <label key={item} className="flex items-center gap-2 text-sm text-stone-700">
-              <input type="checkbox" name="scopes" value={item} defaultChecked />
-              {item}
+              <input
+                type="checkbox"
+                name="scopes"
+                value={item}
+                defaultChecked={READ_ONLY_DEFAULTS.has(item)}
+              />
+              <span className="font-mono text-xs">{item}</span>
+              <span className="text-stone-500">{SCOPE_DESCRIPTIONS[item]}</span>
             </label>
           ))}
         </fieldset>
@@ -142,14 +211,27 @@ export function ApiKeysManager({
           </label>
           <Input id="ttlDays" name="ttlDays" type="number" min={1} max={365} defaultValue={90} required />
         </div>
+        <div>
+          <label htmlFor="apiKeyPassword" className="mb-1.5 block text-sm font-medium text-stone-700">
+            Current password
+          </label>
+          <Input
+            id="apiKeyPassword"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            placeholder="Not needed if you signed in within 15 minutes"
+          />
+        </div>
         <Button type="submit" disabled={pending}>
           Create key
         </Button>
       </form>
       <p className="text-xs text-stone-500">
-        Keys expire, carry only the scopes you leave checked, and cannot exceed your live role.
-        Sign in again if this session is older than 12 hours, and unlock the encryption key first.
-        The secret is shown once. Treat it like a password.
+        Keys expire, carry only the scopes you check (read-only reporting by default), and cannot
+        exceed your live role. Creating or rotating a key needs your password or a sign-in from the
+        last 15 minutes, and an unlocked encryption key. The secret is shown once. Treat it like a
+        password. Keys made before scoped keys existed are not upgraded and must be replaced.
       </p>
     </div>
   );

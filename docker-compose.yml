@@ -8,11 +8,11 @@ services:
     build:
       context: .
       args:
-        TRUSTED_DOMAINS: ${TRUSTED_DOMAINS:-localhost,192.168.1.19,100.80.178.73}
+        TRUSTED_DOMAINS: ${TRUSTED_DOMAINS:-localhost}
     ports:
       - "127.0.0.1:3000:3000"
     environment:
-      TRUSTED_DOMAINS: ${TRUSTED_DOMAINS:-localhost,192.168.1.19,100.80.178.73}
+      TRUSTED_DOMAINS: ${TRUSTED_DOMAINS:-localhost}
       DATABASE_URL: postgres://recruvault:recruvault@db:5432/recruvault
       APP_URL: ${APP_URL:-http://localhost:3000}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
@@ -48,7 +48,7 @@ services:
       minio-init:
         condition: service_completed_successfully
 
-  # One-shot: apply drizzle migrations, then exit. The app waits for this to
+  # One-shot: apply drizzle migrations and seed reference data, then exit. The app waits for this to
   # complete so it never starts against an unmigrated database.
   migrate:
     build:
@@ -62,7 +62,7 @@ services:
     restart: "no"
 
   db:
-    image: postgres:17-alpine
+    image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     environment:
       POSTGRES_USER: recruvault
       POSTGRES_PASSWORD: recruvault
@@ -78,7 +78,7 @@ services:
       retries: 10
 
   clamav:
-    image: clamav/clamav:latest
+    image: clamav/clamav:1.5.4@sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6
     volumes:
       - clamav-data:/var/lib/clamav
     healthcheck:
@@ -90,35 +90,46 @@ services:
       retries: 10
       start_period: 300s
 
+  # The upstream minio/minio images are no longer published on Docker Hub.
+  # pgsty/minio is a community rebuild of the same server; any S3-compatible
+  # store works if you point S3_ENDPOINT elsewhere.
   minio:
-    image: minio/minio:latest
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-recruvault}
-      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-recruvault-secret}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-recruvault-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-recruvault-admin-secret}
     volumes:
       - minio-data:/data
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
 
-  # One-shot: wait for MinIO, then create the documents bucket if missing.
+  # One-shot: create the private documents bucket and an app user that can
+  # only reach that bucket. The app never holds the MinIO root credentials.
   minio-init:
-    image: minio/mc:latest
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
     depends_on:
       minio:
         condition: service_started
     environment:
-      MINIO_USER: ${AWS_ACCESS_KEY_ID:-recruvault}
-      MINIO_PASS: ${AWS_SECRET_ACCESS_KEY:-recruvault-secret}
+      MINIO_USER: ${MINIO_ROOT_USER:-recruvault-admin}
+      MINIO_PASS: ${MINIO_ROOT_PASSWORD:-recruvault-admin-secret}
+      APP_KEY: ${AWS_ACCESS_KEY_ID:-recruvault}
+      APP_SECRET: ${AWS_SECRET_ACCESS_KEY:-recruvault-secret}
       S3_BUCKET: ${S3_BUCKET:-recruvault-documents}
     entrypoint: >
-      /bin/sh -c "
-      until mc alias set local http://minio:9000 \"$$MINIO_USER\" \"$$MINIO_PASS\"; do
+      /bin/sh -ec "
+      until mc alias set local http://minio:9000 \"$$MINIO_USER\" \"$$MINIO_PASS\" >/dev/null; do
         echo 'waiting for minio...'; sleep 2;
       done;
       mc mb --ignore-existing local/\"$$S3_BUCKET\";
-      echo 'minio bucket ready';
+      mc anonymous set none local/\"$$S3_BUCKET\";
+      printf '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\"],\"Resource\":[\"arn:aws:s3:::%s/*\"]},{\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:GetBucketLocation\"],\"Resource\":[\"arn:aws:s3:::%s\"]}]}' \"$$S3_BUCKET\" \"$$S3_BUCKET\" > /tmp/recruvault-app.json;
+      mc admin policy create local recruvault-app /tmp/recruvault-app.json;
+      mc admin user add local \"$$APP_KEY\" \"$$APP_SECRET\" >/dev/null;
+      mc admin policy attach local recruvault-app --user \"$$APP_KEY\" >/dev/null || true;
+      echo 'minio bucket and app user ready';
       "
     restart: "no"
 
@@ -126,7 +137,7 @@ services:
   # reminders, retention purge). For production, use Inngest Cloud instead
   # and remove this service.
   inngest:
-    image: inngest/inngest:latest
+    image: inngest/inngest:v1.46.0@sha256:9c4a2413bdbfa31a94ff54c32ae2dcc6613dbee84bc76db6cf6644d19e357e3e
     command: inngest dev -u http://app:3000/api/inngest --no-discovery
     ports:
       - "127.0.0.1:8288:8288"

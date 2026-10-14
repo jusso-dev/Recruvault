@@ -33,10 +33,9 @@ import { getLogger } from "@/lib/logger";
 import { sendOtpEmail, sendSubmissionReceived } from "@/lib/email";
 import { audit } from "@/lib/audit";
 import { getSession, requestMeta } from "@/lib/guards";
-import { enqueueEvent, publishPendingOutbox } from "@/lib/outbox";
+import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
 import { activeVault } from "@/lib/vault-store";
-import { protectDocument, putProtectedObject } from "@/lib/document-protect";
-import { deleteObject } from "@/lib/storage";
+import { discardProtectedUploads, protectDocument, putProtectedObject } from "@/lib/document-protect";
 import { sniffContentType } from "@/lib/scan";
 import { allowedTypesForField, UPLOAD_MAX_BYTES } from "@/lib/fields";
 import type { ActionResult } from "./org";
@@ -243,6 +242,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
     storageKey: string;
     documentId?: string;
     dekId?: string;
+    envelopeVersion?: number;
   }[] = [];
   const preparedValues: { fieldId: string; raw: string }[] = [];
 
@@ -322,8 +322,9 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
   }
 
   // --- Phase 2: scan, encrypt, then upload ciphertext (external, pre-transaction). ---
-  const uploadedKeys: string[] = [];
-  const uploadedDekIds: string[] = [];
+  // Every key and object created so far. If the submission does not commit,
+  // the keys are shredded and the objects queued for durable deletion.
+  const uploaded: { storageKey: string; dekId: string }[] = [];
   try {
     for (const u of preparedUploads) {
       const prepared = await protectDocument({
@@ -337,19 +338,18 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
         scope: "org",
       });
       if (!prepared.ok) {
-        await cleanupObjects(uploadedKeys);
-        for (const dekId of uploadedDekIds) await shredDataKey(dekId);
+        await discardProtectedUploads(uploaded, request.orgId);
         return prepared;
       }
+      uploaded.push({ storageKey: prepared.storageKey, dekId: prepared.dekId });
       await putProtectedObject(prepared.storageKey, prepared.ciphertext);
       u.storageKey = prepared.storageKey;
       u.bytes = prepared.ciphertext;
       Object.assign(u, {
         documentId: prepared.documentId,
         dekId: prepared.dekId,
+        envelopeVersion: prepared.envelopeVersion,
       });
-      uploadedKeys.push(prepared.storageKey);
-      uploadedDekIds.push(prepared.dekId);
     }
 
     // --- Phase 3: one transaction — either the whole submission lands or none. ---
@@ -419,7 +419,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
             storageKey: u.storageKey,
             checksum: u.checksum,
             dekId: u.dekId,
-            envelopeVersion: 1,
+            envelopeVersion: u.envelopeVersion,
             scanStatus: "clean",
           })
           .returning({ id: documents.id });
@@ -489,8 +489,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
     if (result.alreadyDone) {
       // Objects were uploaded for a submission that another request already
       // completed; clean them up.
-      await cleanupObjects(uploadedKeys);
-      for (const dekId of uploadedDekIds) await shredDataKey(dekId);
+      await discardProtectedUploads(uploaded, request.orgId);
       return { ok: false, error: "This request has already been completed." };
     }
 
@@ -505,7 +504,7 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
       ...meta,
     });
 
-    await publishPendingOutbox();
+    await publishAfterCommit();
 
     const [org] = await db
       .select()
@@ -521,21 +520,12 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
     await clearLinkSession();
     return { ok: true, id: result.submissionId };
   } catch (err) {
-    // Compensation: the transaction rolled back, so remove any uploaded objects.
-    await cleanupObjects(uploadedKeys);
-    for (const dekId of uploadedDekIds) await shredDataKey(dekId);
+    // Compensation: the transaction rolled back, so retire any uploaded objects.
+    await discardProtectedUploads(uploaded, request.orgId).catch((cleanupErr) =>
+      log.error({ err: cleanupErr, accessTokenId: at.id }, "upload compensation failed; reconciler will collect"),
+    );
     log.error({ err, accessTokenId: at.id }, "submitResponse failed");
     return { ok: false, error: "Something went wrong saving your response. Please try again." };
-  }
-}
-
-async function cleanupObjects(keys: string[]): Promise<void> {
-  for (const key of keys) {
-    try {
-      await deleteObject(key);
-    } catch (err) {
-      log.error({ key, err }, "failed to clean up uploaded object");
-    }
   }
 }
 
@@ -557,6 +547,10 @@ export async function saveDraft(formData: FormData): Promise<ActionResult> {
 
   const [request] = await db.select().from(requests).where(eq(requests.id, at.requestId));
   if (!request) return { ok: false, error: "Not found." };
+  // Drafts are only accepted for an organisation that has enrolled its vault.
+  if (!(await activeVault("organisation", request.orgId))) {
+    return { ok: false, error: "This request is not accepting responses yet." };
+  }
 
   const fields = await db
     .select()
@@ -602,7 +596,7 @@ export async function saveDraft(formData: FormData): Promise<ActionResult> {
         if (prior) await shredDataKey(prior.dekId, tx);
         const linkSecret = await readLinkSessionSecret();
         if (!linkSecret) throw new Error("Secure session expired.");
-        ({ dek, dekId } = await createDataKey(tx, { mode: "link", linkSecret, purpose: "draft" }));
+        ({ dek, dekId } = await createDataKey(tx, { mode: "link", linkSecret, purpose: "draft", linkId: at.id }));
         await tx.delete(submissionValues).where(eq(submissionValues.submissionId, submissionId));
         await tx
           .update(submissions)
@@ -622,7 +616,7 @@ export async function saveDraft(formData: FormData): Promise<ActionResult> {
         submissionId = ins.id;
         const linkSecret = await readLinkSessionSecret();
         if (!linkSecret) throw new Error("Secure session expired.");
-        ({ dek, dekId } = await createDataKey(tx, { mode: "link", linkSecret, purpose: "draft" }));
+        ({ dek, dekId } = await createDataKey(tx, { mode: "link", linkSecret, purpose: "draft", linkId: at.id }));
       }
 
       if (values.length > 0) {

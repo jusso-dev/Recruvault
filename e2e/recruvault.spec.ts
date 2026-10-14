@@ -61,7 +61,10 @@ const pdfFile = (name: string) => ({
 
 async function capture(page: Page, fileName: string) {
   await page.evaluate(() => document.fonts.ready);
-  await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
+  // CSSOM writes are allowed under the page CSP; an injected <style> is not.
+  await page.evaluate(() => {
+    for (const el of document.querySelectorAll<HTMLElement>("nextjs-portal")) el.style.display = "none";
+  });
   await page.screenshot({ path: `${SCREENSHOT_DIR}/${fileName}`, fullPage: true });
 }
 
@@ -81,6 +84,8 @@ async function unlockIfNeeded(page: Page, key: string) {
   if (page.url().includes("/vault/unlock") || (await page.getByRole("heading", { name: "Unlock encryption key" }).isVisible().catch(() => false))) {
     await page.getByLabel("Encryption key").fill(key);
     await page.getByRole("button", { name: "Unlock vault" }).click();
+    // Navigating before the action settles would abort the unlock.
+    await page.waitForURL((url) => !url.pathname.startsWith("/vault/unlock"));
   }
 }
 
@@ -153,34 +158,38 @@ test("creates recruiter, reviewer, and job-seeker accounts through the UI", asyn
       await expect(
         page.getByRole("heading", { name: "Set up your recruiter workspace" }),
       ).toBeVisible();
+      // Step 1: the owner account is an ordinary account; no client-chosen account type.
       await page.getByLabel("First name").fill("Bailey");
       await page.getByLabel("Last name").fill("Stone");
       await page.getByLabel("Work email").fill(accounts.bootstrap.email);
-      await page.getByLabel("Organisation name").fill("E2E Platform Bootstrap");
-      await page.getByLabel("Bootstrap token").fill(BOOTSTRAP_TOKEN);
-      await fillEncryptionKey(page);
       await page.getByLabel("Password", { exact: true }).fill(accounts.bootstrap.password);
       await page.getByLabel("Confirm password").fill("does-not-match");
-      await page.getByRole("button", { name: "Create owner and organisation" }).click();
+      await page.getByRole("button", { name: "Create owner account" }).click();
       await expect(toast(page)).toContainText("passwords do not match");
       await page.getByLabel("Confirm password").fill(accounts.bootstrap.password);
-      await page.getByRole("button", { name: "Create owner and organisation" }).click();
-      await expect(toast(page)).toContainText("Verify your email");
+      await page.getByRole("button", { name: "Create owner account" }).click();
+      // Step 2: setup cannot continue until the emailed link is used, even after a refresh.
+      await expect(page.getByText(/Open the verification link sent to/)).toBeVisible();
+      await page.reload();
+      await expect(page.getByText(/Open the verification link sent to/)).toBeVisible();
+      await expect(page.getByLabel("Bootstrap token")).toHaveCount(0);
       const setupMail = await waitForEmail({
         to: accounts.bootstrap.email,
         subject: "Verify your email: Recruvault",
       });
       expect(setupMail.ctaUrl).toBeTruthy();
+      // A browser restart: the verification link signs the owner back in and resumes setup.
       await page.context().clearCookies();
       await page.goto(setupMail.ctaUrl!);
       await page.waitForURL("**/setup");
-      await page.getByLabel("First name").fill("Bailey");
-      await page.getByLabel("Last name").fill("Stone");
-      await page.getByLabel("Work email").fill(accounts.bootstrap.email);
+      // Step 3: the operator-held token, the organisation, and the encryption key.
       await page.getByLabel("Organisation name").fill("E2E Platform Bootstrap");
-      await page.getByLabel("Bootstrap token").fill(BOOTSTRAP_TOKEN);
+      await page.getByLabel("Bootstrap token").fill("not-the-bootstrap-token-for-this-install");
       await fillEncryptionKey(page);
-      await page.getByRole("button", { name: "Create owner and organisation" }).click();
+      await page.getByRole("button", { name: "Create organisation" }).click();
+      await expect(toast(page)).toContainText("bootstrap token is not valid");
+      await page.getByLabel("Bootstrap token").fill(BOOTSTRAP_TOKEN);
+      await page.getByRole("button", { name: "Create organisation" }).click();
       await page.waitForURL("**/dashboard");
       await expect(
         page.getByRole("complementary").getByText("E2E Platform Bootstrap", { exact: true }),
@@ -613,6 +622,9 @@ test("job seeker manages documents, profile, saved roles, and an application", a
     await expect(toast(page)).toContainText("agent setup prompt has been copied");
     await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
     await page.getByLabel("New key name").fill("E2E job-seeker MCP");
+    // Read-only scopes are preselected; this key also updates the profile.
+    await page.getByRole("checkbox", { name: /profile:write/ }).check();
+    await page.getByLabel("Current password").fill(accounts.seeker.password);
     await page.getByRole("button", { name: "Create key" }).click();
     await expect(page.getByText("Copy your key now")).toBeVisible();
     const key = await page.locator("code").filter({ hasText: /^rv_(?!your_key)/ }).first().innerText();
@@ -741,6 +753,7 @@ test("recruiter progresses and shares an application while reviewer stays read-o
       owner.page.getByRole("button", { name: "Copy agent prompt" }),
     ).toBeVisible();
     await owner.page.getByLabel("New key name").fill("E2E automation");
+    await owner.page.getByLabel("Current password").fill(accounts.owner.password);
     await owner.page.getByRole("button", { name: "Create key" }).click();
     await expect(owner.page.getByText("Copy your key now")).toBeVisible();
     const key = await owner.page
@@ -851,30 +864,23 @@ test("recruiter progresses and shares an application while reviewer stays read-o
     const seeker = await newAuthenticatedPage(browser, SEEKER_STATE);
     await seeker.page.goto("/wallet");
     await seeker.page.getByLabel("Type DELETE to confirm").fill("delete");
-    await seeker.page.getByRole("button", { name: "Erase my data" }).click();
+    await seeker.page.getByRole("button", { name: "Delete my account" }).click();
     await expect(toast(seeker.page)).toContainText('Type "DELETE" to confirm erasure');
 
     await seeker.page.getByLabel("Type DELETE to confirm").fill("DELETE");
     const erasureSentAfter = Date.now();
-    await seeker.page.getByRole("button", { name: "Erase my data" }).click();
+    await seeker.page.getByRole("button", { name: "Delete my account" }).click();
     await waitForEmail({
       to: accounts.seeker.email,
       subject: "Your data has been deleted — Recruvault",
       after: erasureSentAfter,
     });
-    await seeker.page.goto("/overview");
     await expect(
-      seeker.page.getByRole("heading", { name: "Your application dashboard" }),
+      seeker.page.getByRole("heading", { name: "This account has been deleted" }),
     ).toBeVisible();
-    await expect(seeker.page.getByText("No applications yet", { exact: true })).toBeVisible();
-    await expect(seeker.page.getByText("0 applications total", { exact: true })).toBeVisible();
-
-    await seeker.page.goto("/documents");
-    await expect(seeker.page.getByText(/No career documents yet/)).toBeVisible();
-    await seeker.page.goto("/wallet");
-    await expect(seeker.page.getByText("No credentials stored yet.", { exact: true })).toBeVisible();
-    await expect(seeker.page.getByLabel("Discoverable by recruiters")).not.toBeChecked();
-    await expect(seeker.page.getByLabel("General location")).toHaveValue("");
+    // Full account deletion: the old session is gone and the seeker area is closed.
+    await seeker.page.goto("/overview");
+    await expect(seeker.page).not.toHaveURL(/\/overview/);
     await seeker.context.close();
   });
 

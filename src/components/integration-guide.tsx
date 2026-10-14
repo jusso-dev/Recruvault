@@ -107,7 +107,7 @@ Do not create, update, send, revoke, or delete any Recruvault data while testing
         <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-500">
           {candidate
             ? "Connect your own tools to review applications, check document status, and keep your discovery profile current. Your key cannot access another job seeker or a recruiter workspace."
-            : "Connect internal systems and AI assistants to your placement workflow. Every request inherits your organisation role and remains tenant-scoped."}
+            : "Connect internal systems and AI assistants to your placement workflow. Every request is limited to the key's scopes and your current organisation role, and remains tenant-scoped."}
         </p>
       </header>
 
@@ -254,8 +254,8 @@ Do not create, update, send, revoke, or delete any Recruvault data while testing
             <h2 className="text-sm font-semibold text-stone-900">Access boundary</h2>
             <p className="mt-2 text-sm leading-6 text-stone-600">
               {candidate
-                ? "A job-seeker key can read only your applications, resume and cover-letter metadata, and your safe discovery profile. It cannot download documents or access recruiter records."
-                : "An organisation key carries the role of the member who created it. Recruiter permissions and tenant checks apply to every REST and MCP call."}
+                ? "A job-seeker key can use only the scopes you check: your applications, resume and cover-letter metadata, and your safe discovery profile. It cannot download documents or access recruiter records. The MCP server shows only the tools your key's scopes allow."
+                : "An organisation key carries only the scopes you check, and never more than the current role of the member who created it. Recruiter permissions and tenant checks apply to every REST and MCP call, and the MCP server shows only the tools the key's scopes allow."}
             </p>
           </div>
         </div>

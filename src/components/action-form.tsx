@@ -55,7 +55,9 @@ export function ActionForm({
         }
         router.refresh();
       } catch (error) {
-        console.error("Action failed", error);
+        // Browser consoles end up in screenshots and support bundles; only
+        // development prints the raw error.
+        if (process.env.NODE_ENV !== "production") console.error("Action failed", error);
         showToast({
           tone: "error",
           message: userFacingError(error),

@@ -24,12 +24,15 @@ export function SignUpForm({ allowRecruiterSignup }: { allowRecruiterSignup: boo
     try {
       const form = new FormData(e.currentTarget);
       const email = String(form.get("email")).trim();
+      // accountType is a request, not a user field: the server assigns "org"
+      // only when recruiter self-registration is enabled (see lib/auth.ts).
+      const requested = { accountType: type };
       const { error } = await authClient.signUp.email({
         name: String(form.get("name")),
         email,
         password: String(form.get("password")),
-        accountType: type,
         callbackURL: type === "org" ? "/onboarding" : "/overview",
+        ...requested,
       });
       if (error) {
         showToast({

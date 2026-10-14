@@ -10,11 +10,10 @@ export const API_SCOPES = [
   "roles:write",
   "jd:write",
   "invitations:send",
-  "export:read",
+  "submissions:read",
   "profile:read",
   "profile:write",
   "documents:read",
-  "documents:write",
   "applications:read",
   "match:read",
 ] as const;
@@ -28,9 +27,7 @@ export const ORG_API_SCOPES = [
   "roles:write",
   "jd:write",
   "invitations:send",
-  "export:read",
-  "documents:read",
-  "documents:write",
+  "submissions:read",
   "match:read",
 ] as const satisfies readonly ApiScope[];
 
@@ -38,16 +35,42 @@ export const CANDIDATE_API_SCOPES = [
   "profile:read",
   "profile:write",
   "documents:read",
-  "documents:write",
   "applications:read",
 ] as const satisfies readonly ApiScope[];
 
-export const REPORTING_SCOPES = ["reports:read", "roles:read", "documents:read"] as const satisfies readonly ApiScope[];
+/**
+ * Read-only reporting keys for common agent tasks. They cannot create roles,
+ * upload JDs, send invitations, list submissions, or change a profile.
+ */
+export const REPORTING_SCOPES = ["reports:read", "roles:read"] as const satisfies readonly ApiScope[];
+export const CANDIDATE_READ_SCOPES = [
+  "profile:read",
+  "documents:read",
+  "applications:read",
+] as const satisfies readonly ApiScope[];
+
+export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
+  "reports:read": "Read recruiter reports",
+  "roles:read": "List and read roles",
+  "roles:write": "Create roles",
+  "jd:write": "Upload job descriptions",
+  "invitations:send": "Send secure links (outbound email)",
+  "submissions:read": "Export submission metadata",
+  "profile:read": "Read discovery profile",
+  "profile:write": "Change discovery profile",
+  "documents:read": "Read career-document metadata",
+  "applications:read": "Read applications",
+  "match:read": "Match candidates",
+};
 
 export const DEFAULT_KEY_TTL_DAYS = 90;
 export const MAX_KEY_TTL_DAYS = 365;
+/** Active keys per user (organisation) or per job seeker. */
 export const MAX_ACTIVE_KEYS = 10;
-export const RECENT_AUTH_MS = 12 * 60 * 60 * 1000;
+/** Active keys across a whole organisation. */
+export const MAX_ORG_ACTIVE_KEYS = 50;
+/** Creating or rotating a key needs a session this fresh, or the password. */
+export const RECENT_AUTH_MS = 15 * 60 * 1000;
 
 const SCOPE_SET = new Set<string>(API_SCOPES);
 
@@ -88,18 +111,30 @@ export function recentAuthentication(signedInAt: Date | null | undefined, now = 
   return now - signedInAt.getTime() <= RECENT_AUTH_MS;
 }
 
-export function routeBudget(scope: ApiScope): { max: number; windowMs: number } {
+export interface Budget {
+  max: number;
+  windowMs: number;
+}
+
+/** Route-specific budget: uploads, outbound delivery, exports, and matching are tighter. */
+export function routeBudget(scope: ApiScope): Budget {
   switch (scope) {
     case "jd:write":
-    case "documents:write":
       return { max: 20, windowMs: 60_000 };
     case "invitations:send":
       return { max: 30, windowMs: 60_000 };
-    case "export:read":
-      return { max: 10, windowMs: 60_000 };
+    case "submissions:read":
+      return { max: 30, windowMs: 60_000 };
     case "match:read":
       return { max: 30, windowMs: 60_000 };
     default:
       return { max: 120, windowMs: 60_000 };
   }
 }
+
+/** Budgets shared by every route, applied on top of the route budget. */
+export const GLOBAL_BUDGETS = {
+  key: { max: 300, windowMs: 60_000 },
+  principal: { max: 600, windowMs: 60_000 },
+  tenant: { max: 1200, windowMs: 60_000 },
+} as const satisfies Record<string, Budget>;

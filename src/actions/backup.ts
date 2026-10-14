@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireOrgUser, requestMeta } from "@/lib/guards";
+import { requireUnlockedOrg, requestMeta } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { validateBackupForm } from "@/lib/backup-crypto";
 import { getPublicBackupConfig, runBackup, saveBackupConfig } from "@/lib/backup";
@@ -9,7 +9,7 @@ import { sanitizeForTelemetry } from "@/lib/redact";
 import type { ActionResult } from "@/actions/org";
 
 async function owner() {
-  const ctx = await requireOrgUser("org:manage");
+  const ctx = await requireUnlockedOrg("org:manage");
   if (ctx.role !== "owner") return { ok: false as const, error: "Only an organisation owner can configure backups." };
   return { ok: true as const, ctx };
 }

@@ -11,19 +11,15 @@ export async function register() {
 
   if (process.env.SENTRY_DSN) {
     const Sentry = await import("@sentry/nextjs");
-    const { sanitizeForTelemetry } = await import("@/lib/redact");
+    const { scrubBreadcrumb, scrubSentryEvent } = await import("@/lib/telemetry");
+    // Server (Node) runtime only. The edge proxy and the browser do not report
+    // to Sentry, so no unscrubbed client or edge events exist.
     Sentry.init({
       dsn: process.env.SENTRY_DSN,
       tracesSampleRate: 0,
       sendDefaultPii: false,
-      beforeSend(event) {
-        if (event.request) {
-          delete event.request.cookies;
-          delete event.request.data;
-          event.request.headers = {};
-        }
-        return sanitizeForTelemetry(event) as typeof event;
-      },
+      beforeSend: scrubSentryEvent,
+      beforeBreadcrumb: scrubBreadcrumb,
     });
   }
 }

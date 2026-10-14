@@ -12,14 +12,14 @@ import {
   walletItems,
   walletShares,
 } from "@/db/schema";
-import { requireCandidate, requestMeta } from "@/lib/guards";
+import { requireCandidate, requestMeta, requireUnlockedCandidate, requireEnrolledCandidate } from "@/lib/guards";
 import { encryptField, shredDataKey } from "@/lib/crypto";
 import { audit } from "@/lib/audit";
-import { enqueueEvent, publishPendingOutbox } from "@/lib/outbox";
-import { deleteObject } from "@/lib/storage";
+import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
 import { activeVault } from "@/lib/vault-store";
 import { readUnlockedCustomerKey } from "@/lib/vault-session";
-import { protectDocument, putProtectedObject } from "@/lib/document-protect";
+import { discardProtectedUploads, protectDocument, putProtectedObject } from "@/lib/document-protect";
+import { getLogger } from "@/lib/logger";
 import { sniffContentType } from "@/lib/scan";
 import {
   UPLOAD_MAX_BYTES,
@@ -28,8 +28,10 @@ import {
   allowedTypesForWalletDocument,
 } from "@/lib/fields";
 import { sendErasureConfirmation } from "@/lib/email";
-import { eraseCandidate } from "@/lib/retention";
+import { deleteWalletDocumentRecord, eraseCandidate } from "@/lib/retention";
 import type { ActionResult } from "./org";
+
+const log = getLogger("wallet");
 
 /** Create or update a wallet credential. Values are field-level encrypted. */
 export async function upsertWalletItem(formData: FormData): Promise<ActionResult> {
@@ -97,7 +99,7 @@ export async function upsertWalletItem(formData: FormData): Promise<ActionResult
 
 /** Delete a wallet credential via crypto-shred. */
 export async function deleteWalletItem(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireCandidate();
+  const ctx = await requireEnrolledCandidate();
   const id = String(formData.get("id") ?? "");
 
   const [item] = await db
@@ -166,35 +168,48 @@ export async function uploadWalletDocument(formData: FormData): Promise<ActionRe
     scope: "wallet",
   });
   if (!prepared.ok) return prepared;
-  await putProtectedObject(prepared.storageKey, prepared.ciphertext);
 
-  const [doc] = await db.transaction(async (tx) => {
-    const [inserted] = await tx
-      .insert(walletDocuments)
-      .values({
-        id: prepared.documentId,
-        candidateAccountId: ctx.candidateAccountId,
-        kind,
-        fileName: file.name,
-        contentType: "application/octet-stream",
-        originalContentType: sniffed,
-        storageKey: prepared.storageKey,
-        checksum: createHash("sha256").update(bytes).digest("hex"),
-        dekId: prepared.dekId,
-        envelopeVersion: 1,
-        scanStatus: "clean",
-      })
-      .returning({ id: walletDocuments.id });
-    await enqueueEvent(
-      tx,
-      "document/uploaded",
-      { documentId: inserted.id, table: "wallet_documents" },
-      `document/uploaded:wallet_documents:${inserted.id}`,
+  let doc: { id: string };
+  try {
+    await putProtectedObject(prepared.storageKey, prepared.ciphertext);
+    [doc] = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(walletDocuments)
+        .values({
+          id: prepared.documentId,
+          candidateAccountId: ctx.candidateAccountId,
+          kind,
+          fileName: file.name,
+          contentType: "application/octet-stream",
+          originalContentType: sniffed,
+          storageKey: prepared.storageKey,
+          checksum: createHash("sha256").update(bytes).digest("hex"),
+          dekId: prepared.dekId,
+          envelopeVersion: prepared.envelopeVersion,
+          scanStatus: "clean",
+        })
+        .returning({ id: walletDocuments.id });
+      await enqueueEvent(
+        tx,
+        "document/uploaded",
+        { documentId: inserted.id, table: "wallet_documents" },
+        `document/uploaded:wallet_documents:${inserted.id}`,
+        ctx.candidateAccountId,
+      );
+      return [inserted];
+    });
+  } catch (err) {
+    // The row did not commit: shred the key and queue the object durably.
+    await discardProtectedUploads(
+      [{ storageKey: prepared.storageKey, dekId: prepared.dekId }],
       ctx.candidateAccountId,
+    ).catch((cleanupErr) =>
+      log.error({ err: cleanupErr }, "wallet upload compensation failed; reconciler will collect"),
     );
-    return [inserted];
-  });
-  await publishPendingOutbox();
+    log.error({ err }, "wallet document upload failed");
+    return { ok: false, error: "Could not save the document. Please try again." };
+  }
+  await publishAfterCommit();
 
   const meta = await requestMeta();
   await audit({
@@ -213,26 +228,13 @@ export async function uploadWalletDocument(formData: FormData): Promise<ActionRe
 }
 
 export async function deleteWalletDocument(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireCandidate();
+  const ctx = await requireEnrolledCandidate();
   const id = String(formData.get("id") ?? "");
 
-  const [doc] = await db
-    .select()
-    .from(walletDocuments)
-    .where(
-      and(
-        eq(walletDocuments.id, id),
-        eq(walletDocuments.candidateAccountId, ctx.candidateAccountId),
-      ),
-    );
-  if (!doc) return { ok: false, error: "Not found." };
-
-  try {
-    await deleteObject(doc.storageKey);
-  } catch (err) {
-    console.error(`Failed to delete object ${doc.storageKey}:`, err);
+  // Crypto-shred, queue durable object deletion, and drop the row together.
+  if (!(await deleteWalletDocumentRecord(ctx.candidateAccountId, id))) {
+    return { ok: false, error: "Not found." };
   }
-  await db.delete(walletDocuments).where(eq(walletDocuments.id, doc.id));
 
   const meta = await requestMeta();
   await audit({
@@ -240,7 +242,7 @@ export async function deleteWalletDocument(formData: FormData): Promise<ActionRe
     actorId: ctx.candidateAccountId,
     action: "wallet_document.deleted",
     targetType: "wallet_document",
-    targetId: doc.id,
+    targetId: id,
     ...meta,
   });
 
@@ -252,7 +254,7 @@ export async function deleteWalletDocument(formData: FormData): Promise<ActionRe
 
 /** Revoke future use of a shared credential or document. */
 export async function revokeWalletShare(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireCandidate();
+  const ctx = await requireEnrolledCandidate();
   const id = String(formData.get("id") ?? "");
 
   const [share] = await db
@@ -289,7 +291,7 @@ export async function revokeWalletShare(formData: FormData): Promise<ActionResul
 
 /** Favourite / unfavourite a role the seeker has access to. */
 export async function toggleSavedRole(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireCandidate();
+  const ctx = await requireUnlockedCandidate();
   const requestId = String(formData.get("requestId") ?? "");
 
   // Only listed (seeker-discoverable) roles can be favourited; don't let an
@@ -345,7 +347,7 @@ export async function requestErasure(formData: FormData): Promise<ActionResult> 
  * opaque handle. Never touches wallet ciphertext or documents.
  */
 export async function upsertDiscoveryProfile(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireCandidate();
+  const ctx = await requireUnlockedCandidate();
 
   const discoverable = formData.get("discoverable") === "on";
   const clearanceLevel = String(formData.get("clearanceLevel") ?? "").trim() || null;

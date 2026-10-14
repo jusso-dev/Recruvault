@@ -1,19 +1,12 @@
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
-import { db } from "@/db";
-import { memberships } from "@/db/schema";
 import { getSession } from "@/lib/guards";
+import { isPlatformBootstrapped } from "@/lib/platform-bootstrap";
 import { SetupForm } from "./setup-form";
 
 export const dynamic = "force-dynamic";
 
 export default async function SetupPage() {
-  const [owner] = await db
-    .select({ id: memberships.id })
-    .from(memberships)
-    .where(eq(memberships.role, "owner"))
-    .limit(1);
-  if (owner) redirect("/sign-in");
+  if (await isPlatformBootstrapped()) redirect("/sign-in");
   const session = await getSession();
 
   return (
