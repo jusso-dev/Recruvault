@@ -48,4 +48,7 @@ USER app
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:3000/api/live').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
-CMD ["node", "server.js"]
+# Docker sets HOSTNAME to the container id, and the standalone server treats
+# that value as its listen address. Force all interfaces or the health check
+# cannot connect to 127.0.0.1.
+CMD ["sh", "-c", "HOSTNAME=0.0.0.0 exec node server.js"]

@@ -34,4 +34,7 @@ COPY drizzle ./drizzle
 COPY src ./src
 USER app
 EXPOSE 3000
-CMD ["node", "server.js"]
+# Docker sets HOSTNAME to the container id, and the standalone server treats
+# that value as its listen address. Force all interfaces or a localhost
+# health check cannot connect.
+CMD ["sh", "-c", "HOSTNAME=0.0.0.0 exec node server.js"]
