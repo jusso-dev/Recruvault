@@ -58,6 +58,12 @@
   }
 }
 
+.tone-review { background-color: oklch(0.68 0.13 235); }
+.tone-shortlisted { background-color: oklch(0.77 0.14 80); }
+.tone-interview { background-color: oklch(0.63 0.16 48); }
+.tone-offer { background-color: oklch(0.67 0.12 115); }
+.tone-placed { background-color: oklch(0.62 0.15 155); }
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

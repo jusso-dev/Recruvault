@@ -19,14 +19,6 @@ import {
   type DistributionItem,
 } from "@/components/dashboard-visuals";
 
-const STATUS_COLOURS = {
-  review: "oklch(0.68 0.13 235)",
-  shortlisted: "oklch(0.77 0.14 80)",
-  interview: "oklch(0.63 0.16 48)",
-  offer: "oklch(0.67 0.12 115)",
-  placed: "oklch(0.62 0.15 155)",
-};
-
 const DOT: Record<string, string> = {
   green: "bg-emerald-500",
   amber: "bg-amber-500",
@@ -113,27 +105,27 @@ export default async function DashboardPage() {
       value: visibleSubmissions.filter((row) =>
         ["received", "under_review", "follow_up"].includes(row.status),
       ).length,
-      colour: STATUS_COLOURS.review,
+      tone: "review",
     },
     {
       label: "Shortlisted",
       value: visibleSubmissions.filter((row) => row.status === "shortlisted").length,
-      colour: STATUS_COLOURS.shortlisted,
+      tone: "shortlisted",
     },
     {
       label: "Interview",
       value: visibleSubmissions.filter((row) => row.status === "interview").length,
-      colour: STATUS_COLOURS.interview,
+      tone: "interview",
     },
     {
       label: "Offer",
       value: visibleSubmissions.filter((row) => ["offer", "accepted"].includes(row.status)).length,
-      colour: STATUS_COLOURS.offer,
+      tone: "offer",
     },
     {
       label: "Placed",
       value: placements,
-      colour: STATUS_COLOURS.placed,
+      tone: "placed",
     },
   ];
 

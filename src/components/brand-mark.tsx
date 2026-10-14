@@ -1,4 +1,3 @@
-import Image from "next/image";
 import { cn } from "@/lib/utils";
 
 export function BrandMark({
@@ -9,7 +8,10 @@ export function BrandMark({
   className?: string;
 }) {
   return (
-    <Image
+    // A plain image, not next/image: the optimizer writes style="color:transparent",
+    // which the production style-src nonce rejects.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
       src="/brand/recruvault-mark.png"
       width={size}
       height={size}

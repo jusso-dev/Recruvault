@@ -91,6 +91,9 @@ export const config = {
     "/verify-email",
     "/vault/:path*",
     "/account-deleted",
+    "/forgot-password",
+    "/reset-password",
+    "/r/:path*",
     "/api/v1/:path*",
   ],
 };
