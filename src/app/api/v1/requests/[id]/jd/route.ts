@@ -7,9 +7,11 @@ import { resolveOrgContext } from "@/lib/api-auth";
 import { ApiError, handle, json } from "@/lib/api/http";
 import { JD_ALLOWED_TYPES, UPLOAD_MAX_BYTES } from "@/lib/fields";
 import { sniffContentType } from "@/lib/scan";
-import { emitEvent } from "@/lib/outbox";
+import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
+import { shredDataKey } from "@/lib/crypto";
+import { enqueueDeletion } from "@/lib/deletion-queue";
 import { activeVault } from "@/lib/vault-store";
-import { protectDocument, putProtectedObject } from "@/lib/document-protect";
+import { discardProtectedUploads, protectDocument, putProtectedObject } from "@/lib/document-protect";
 import { audit } from "@/lib/audit";
 import { AuthError } from "@/lib/guards";
 
@@ -51,32 +53,65 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       scope: "org",
     });
     if (!prepared.ok) throw new ApiError(400, prepared.error);
-    await putProtectedObject(prepared.storageKey, prepared.ciphertext);
-    const [doc] = await db
-      .insert(documents)
-      .values({
-        id: prepared.documentId,
-        orgId: ctx.orgId,
-        kind: "jd",
-        fileName: jd.name,
-        contentType: "application/octet-stream",
-        originalContentType: sniffed,
-        sizeBytes: jd.size,
-        storageKey: prepared.storageKey,
-        checksum: createHash("sha256").update(bytes).digest("hex"),
-        dekId: prepared.dekId,
-        envelopeVersion: 1,
-        scanStatus: "clean",
-      })
-      .returning({ id: documents.id });
 
-    await db.update(requests).set({ jdDocumentId: doc.id }).where(eq(requests.id, id));
-    await emitEvent(
-      "document/uploaded",
-      { documentId: doc.id, table: "documents" },
-      `document/uploaded:documents:${doc.id}`,
-      ctx.orgId,
-    );
+    // The new document, the pointer switch, and retirement of the replaced JD
+    // commit together. The replaced JD's key is shredded and its object queued
+    // for durable deletion in the same transaction.
+    let doc: { id: string };
+    try {
+      await putProtectedObject(prepared.storageKey, prepared.ciphertext);
+      doc = await db.transaction(async (tx) => {
+        const [current] = await tx
+          .select({ jdDocumentId: requests.jdDocumentId })
+          .from(requests)
+          .where(eq(requests.id, id))
+          .for("update");
+        const [inserted] = await tx
+          .insert(documents)
+          .values({
+            id: prepared.documentId,
+            orgId: ctx.orgId,
+            kind: "jd",
+            fileName: jd.name,
+            contentType: "application/octet-stream",
+            originalContentType: sniffed,
+            sizeBytes: jd.size,
+            storageKey: prepared.storageKey,
+            checksum: createHash("sha256").update(bytes).digest("hex"),
+            dekId: prepared.dekId,
+            envelopeVersion: prepared.envelopeVersion,
+            scanStatus: "clean",
+          })
+          .returning({ id: documents.id });
+        await tx.update(requests).set({ jdDocumentId: inserted.id }).where(eq(requests.id, id));
+        if (current?.jdDocumentId) {
+          const [old] = await tx
+            .select()
+            .from(documents)
+            .where(and(eq(documents.id, current.jdDocumentId), eq(documents.orgId, ctx.orgId)));
+          if (old) {
+            if (old.dekId) await shredDataKey(old.dekId, tx);
+            await enqueueDeletion(tx, old.storageKey, ctx.orgId);
+            await tx.delete(documents).where(eq(documents.id, old.id));
+          }
+        }
+        await enqueueEvent(
+          tx,
+          "document/uploaded",
+          { documentId: inserted.id, table: "documents" },
+          `document/uploaded:documents:${inserted.id}`,
+          ctx.orgId,
+        );
+        return inserted;
+      });
+    } catch (err) {
+      await discardProtectedUploads(
+        [{ storageKey: prepared.storageKey, dekId: prepared.dekId }],
+        ctx.orgId,
+      );
+      throw err;
+    }
+    await publishAfterCommit();
     await audit({
       orgId: ctx.orgId,
       actorType: "org_user",

@@ -218,23 +218,25 @@ export default async function WalletPage() {
 
       <Card className="border-red-200 bg-red-50/30">
         <CardHeader>
-          <CardTitle>Delete everything</CardTitle>
+          <CardTitle>Delete account</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="mb-3 text-sm text-stone-600">
-            This deletes the career record: credentials, documents, applications, sessions,
-            and API keys. Encryption keys for that record are destroyed. Signing in again
-            does not recreate it. Backups made before deletion can still contain ciphertext
-            until they expire. Type <strong>DELETE</strong> to confirm.
+            This deletes your Recruvault account: sign-in methods, sessions, API keys,
+            credentials, documents, applications, and your discovery profile. Encryption keys
+            are destroyed first, so stored files are unreadable even before they are removed.
+            You cannot sign in to this account again. Backups made before deletion can still
+            contain ciphertext until they expire. Type <strong>DELETE</strong> to confirm.
           </p>
           <ActionForm
             action={requestErasure}
-            successMessage="Erasure complete. A confirmation email is on its way."
+            successMessage="Account deleted. A confirmation email is on its way."
+            redirectTo="/account-deleted"
             className="flex flex-col gap-2 sm:flex-row sm:items-center"
           >
             <Input name="confirm" placeholder="DELETE" className="w-32" aria-label="Type DELETE to confirm" />
             <Button type="submit" variant="destructive">
-              Erase my data
+              Delete my account
             </Button>
           </ActionForm>
         </CardContent>

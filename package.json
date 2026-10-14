@@ -18,7 +18,9 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:seed-demo": "tsx src/db/seed-demo.ts",
     "typecheck": "tsc --noEmit",
-    "check:deploy-env": "tsx scripts/check-deploy-env.ts"
+    "check:deploy-env": "tsx scripts/check-deploy-env.ts",
+    "backup:restore": "tsx scripts/restore-backup.ts",
+    "outbox": "tsx scripts/outbox.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1080.0",

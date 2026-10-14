@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Resend } from "resend";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { suppressions } from "@/db/schema";
+import { deliveries, suppressions } from "@/db/schema";
 import { getLogger } from "@/lib/logger";
 
 const log = getLogger("email");
@@ -287,6 +287,23 @@ export async function sendErasureConfirmation(opts: { to: string }) {
     to: opts.to,
     subject: "Your data has been deleted — Recruvault",
     heading: "Deletion confirmed",
-    body: "Your Recruvault career record has been deleted. Access was revoked, encryption keys for that record were destroyed, and stored files are queued for removal. A metadata-only audit record remains. This does not erase copies that were already in a backup taken before deletion; those copies age out with the backup window and cannot be opened once the keys are gone. Signing in again will not restore the deleted record.",
+    body: "Your Recruvault account has been deleted. Sign-in methods, sessions, and API keys were revoked, encryption keys for your career record were destroyed, and stored files are queued for removal. A metadata-only audit record remains. This does not erase copies that were already in a backup taken before deletion; those copies age out with the backup window and cannot be opened once the keys are gone. The deleted account cannot sign in again.",
+  });
+}
+
+/**
+ * Apply a Resend bounce or complaint: suppress the address and mark the
+ * delivery it refers to. Idempotent, so webhook retries are harmless. Falls
+ * back to a recipient match when the provider gives no message id.
+ */
+export async function applyEmailEvent(e: { type: string; email: string; messageId?: string }) {
+  if (e.type !== "email.bounced" && e.type !== "email.complained") return;
+  const email = e.email.toLowerCase();
+  await db.transaction(async (tx) => {
+    await tx.insert(suppressions).values({ email, reason: e.type }).onConflictDoNothing();
+    await tx
+      .update(deliveries)
+      .set({ status: "bounced", updatedAt: new Date() })
+      .where(e.messageId ? eq(deliveries.providerMessageId, e.messageId) : eq(deliveries.recipient, email));
   });
 }

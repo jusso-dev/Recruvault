@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { emitEvent } from "@/lib/outbox";
+import { applyEmailEvent } from "@/lib/email";
 import { verifySvixSignature } from "@/lib/svix";
 
 /**
- * Resend webhook receiver (svix-signed). Bounce and complaint events flow
- * into Inngest, which maintains the suppression list.
+ * Resend webhook receiver (svix-signed). Bounces and complaints update the
+ * suppression list in one transaction before the 200 is returned, so a failed
+ * write makes Resend retry and no recipient address enters an event payload.
  */
 
 function verifySvix(req: NextRequest, payload: string): boolean {
@@ -32,11 +33,7 @@ export async function POST(req: NextRequest) {
 
   const to = Array.isArray(body.data?.to) ? body.data?.to[0] : body.data?.to;
   if (to) {
-    await emitEvent(
-      "email/event",
-      { type: body.type, email: to, messageId: body.data?.email_id },
-      `email/event:${body.data?.email_id ?? "none"}:${body.type}`,
-    );
+    await applyEmailEvent({ type: body.type, email: to, messageId: body.data?.email_id });
   }
 
   return NextResponse.json({ ok: true });

@@ -11,11 +11,8 @@ security requirements that are still open. Customer keys are enrolled per organi
 Use the committed npm lockfiles for both the application and `mcp/`. Docker
 builds use `npm ci` and must fail on installation errors. Environment files
 are excluded from the Docker context; supply deployment secrets at runtime.
-Both runtime images patch Alpine packages and omit npm, Yarn, and Corepack.
-The Railway image retains only the installed dependency closure needed for
-migration/seeding, plus the traced app dependencies. It invokes tool entry
-points with Node and excludes unrelated development tools such as Inngest CLI
-and ESLint. Scan both final images as well as the development lockfile.
+The runtime and migrate images patch Alpine packages and omit npm, Yarn, and
+Corepack. Scan both final images as well as the development lockfile.
 
 Run the following after dependency changes:
 
@@ -31,15 +28,29 @@ npm audit --omit=dev
 npm --prefix mcp ci
 npm --prefix mcp audit
 node --check mcp/index.mjs
+npm --prefix mcp test
 ```
 
-Integration tests require a working Docker runtime and use disposable
-PostgreSQL containers. Also run migration drift checks, the browser suite in
-isolated infrastructure, and Trivy against both lockfiles and built images.
-CI audits application runtime and MCP dependencies; Trivy rejects fixable
-high/critical findings and uploads SARIF even when its scan fails. Dependabot
-configuration covers both npm projects and GitHub Actions. Repository-level
-alert settings are separate from this configuration.
+Integration tests use a disposable PostgreSQL database: set
+`INTEGRATION_DATABASE_URL` to an admin connection on a throwaway server, or let
+them start a Testcontainers PostgreSQL (requires Docker). A suite that cannot
+reach its database fails rather than skipping.
+
+CI runs lint, typecheck, unit tests, the migration drift check, a production
+build, the PostgreSQL/object-store integration suites, the browser suite, a
+production-mode smoke test (`scripts/smoke-production.mjs`: security headers,
+secure session cookies, and refusal to start with test switches), and the MCP
+audit. CI audits runtime dependencies and reports the full development audit.
+Trivy scans both lockfiles including development dependencies and the
+`runner` and `migrate` images. It uploads every high/critical
+finding, including unfixed ones, to code scanning and fails only on findings
+that have a fixed version. The image job also fails if any layer contains an
+`.env` file. Base images and Compose services are pinned by digest.
+Dependabot covers both npm projects, GitHub Actions, Dockerfiles, and Compose.
+Repository-level alert settings are separate from this configuration.
+
+[docs/dependency-alerts.md](docs/dependency-alerts.md) maps every code-scanning
+alert to the version that fixed it or to its unresolved status.
 
 ## Temporary dependency overrides
 

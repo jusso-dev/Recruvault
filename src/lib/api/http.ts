@@ -21,6 +21,9 @@ export class RateLimitError extends Error {
   }
 }
 
+const UNAUTHENTICATED =
+  /Invalid, expired, or revoked API key|must be replaced|issued before encryption enrollment|Sign in required/i;
+
 export function json(data: unknown, status = 200): NextResponse {
   return NextResponse.json(data, { status });
 }
@@ -38,7 +41,10 @@ export async function handle(
     return withCors(response, request);
   } catch (err) {
     if (err instanceof RateLimitError) {
-      const response = NextResponse.json({ error: err.message }, { status: 429 });
+      const response = NextResponse.json(
+        { error: err.message, retryAfterSeconds: err.retryAfter },
+        { status: 429 },
+      );
       response.headers.set("Retry-After", String(err.retryAfter));
       return withCors(response, request);
     }
@@ -46,7 +52,9 @@ export async function handle(
       return withCors(NextResponse.json({ error: err.message }, { status: err.status }), request);
     }
     if (err instanceof AuthError) {
-      const status = /API key|Sign in required/i.test(err.message) ? 401 : 403;
+      // 401: the credential itself is unusable (replace it). 403: valid, but
+      // the scope, role, verification, or vault state does not allow this.
+      const status = UNAUTHENTICATED.test(err.message) ? 401 : 403;
       return withCors(NextResponse.json({ error: err.message }, { status }), request);
     }
     throw err;

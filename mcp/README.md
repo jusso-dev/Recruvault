@@ -8,12 +8,17 @@ can review applications, inspect career-document status, and update their
 discovery profile.
 
 It talks only to the Recruvault **v1 REST API** over an API key, so it never
-touches the database directly and inherits your role and org.
+touches the database directly. At startup it reads the key's kind and scopes
+from `GET /api/v1/me/key` and registers only the tools that key can use. A key
+never exceeds the current role of the member who created it.
 
 ## Setup
 
-1. In Recruvault, open **API & MCP** and create a key (starts with `rv_`). Copy
-   it once; it is not shown again. Its permissions match the account that made it.
+1. In Recruvault, open **API & MCP** and create a key (starts with `rv_`). Check
+   only the scopes the agent needs; read-only reporting scopes are preselected.
+   Copy it once; it is not shown again. If the key is invalid, expired, revoked,
+   or a pre-scope legacy key, the server exits at startup and says to create a
+   new one.
 2. Install this package's dependencies:
 
    ```bash
@@ -52,19 +57,24 @@ Add to the client's MCP config:
 
 ## Tools
 
-| Tool | What it does |
-|------|--------------|
-| `create_request` | Create a role (resume + cover letter/suitability statement added by default) |
-| `upload_jd` | Attach a PDF or Word JD from a local file path |
-| `find_candidates` | Match role requirements to opted-in seekers (opaque handles, no PII) |
-| `send_request` | Send the secure link to an email or a candidate handle |
-| `list_requests` | List your organisation's requests |
-| `get_submissions` | List submission metadata for a request |
-| `get_recruiter_report` | Report on unfilled roles, application trends, outstanding information, deadlines, and weekly priorities |
-| `list_applications` | List the job seeker's own applications and stages |
-| `list_career_documents` | List resume and cover-letter metadata and scan state |
-| `get_profile` | Read the job seeker's discovery profile |
-| `update_profile` | Update clearance, skills, location, and discoverability |
+| Tool | Scope | What it does |
+|------|-------|--------------|
+| `create_request` | `roles:write` | Create a role (resume + cover letter/suitability statement added by default) |
+| `upload_jd` | `jd:write` | Attach a PDF or Word JD from a local file path |
+| `find_candidates` | `match:read` | Match role requirements to opted-in seekers (opaque handles, no PII) |
+| `send_request` | `invitations:send` | Send the secure link to an email or a candidate handle |
+| `list_requests` | `roles:read` | List your organisation's requests |
+| `get_submissions` | `submissions:read` | List submission metadata for a request |
+| `get_recruiter_report` | `reports:read` | Report on unfilled roles, application trends, outstanding information, deadlines, and weekly priorities |
+| `list_applications` | `applications:read` | List the job seeker's own applications and stages |
+| `list_career_documents` | `documents:read` | List resume and cover-letter metadata and scan state |
+| `get_profile` | `profile:read` | Read the job seeker's discovery profile |
+| `update_profile` | `profile:write` | Update clearance, skills, location, and discoverability |
+| `get_key_info` | any | Show the key's kind, scopes, expiry, and available tools |
+
+Tool errors say what to fix: 401 means create a new key, 403 names the missing
+scope or role, and 429 gives the seconds to wait. Run `npm test` in `mcp/` for
+the protocol smoke test.
 
 ## Example flow
 

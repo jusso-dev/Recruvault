@@ -119,32 +119,15 @@ This is a passion project: public, MIT-licensed, and self-hostable by anyone. Is
 - **Delivery** — opaque single-purpose expiring links by email (Resend) and SMS (AWS SNS), sent through Inngest with retries. Recruiters see sent / opened / started / submitted without seeing data before submission.
 - **Job seeker flow** — mobile-first: OTP step-up (defends forwarded links), versioned consent with IP + timestamp, watermarked JD view (viewer identity + timestamp burned into every page for traceability), wallet pre-fill, controlled uploads (type/size limits, content sniffing, ClamAV before visibility).
 - **Review and export** — in-browser rendering through authorised audited routes (no public URLs), submission statuses, CSV/JSON export of decrypted structured data as a logged, role-gated action.
-- **Security core** — envelope encryption (per-record DEKs wrapped by a self-managed master key, no external KMS), field-level encryption for PII, and private S3-compatible object storage. AWS S3 uses SSE-S3 (AES-256); MinIO can opt in when its KMS is configured.
+- **Security core** — envelope encryption (per-record DEKs wrapped by the owner's customer key, no external KMS), field-level encryption for PII, and per-document encrypted uploads: S3/MinIO only ever receive ciphertext under an opaque object name. Storage-side encryption (SSE-S3 on AWS, opt-in on MinIO) is an extra layer, not the document envelope.
 - **Audit trail** — append-only, hash-chained per organisation, tamper-evident (integrity is verified on the audit page). No PII in the log; survives purges as a metadata-only record.
-- **Retention and deletion** — per-org retention windows enforced by a scheduled purge; structured values are crypto-shredded by destroying their DEKs, and document objects are deleted from storage. Job-seeker career-record erasure is available; full authentication-account deletion and durable storage-deletion retries are tracked in the release backlog.
+- **Retention and deletion** — per-org retention windows (including abandoned drafts) enforced by a scheduled purge. Purges and job-seeker account deletion crypto-shred field and document keys in one transaction, queue storage objects on a durable, retried, reconciled deletion queue, and record progress (access revoked, keys shredded, cleanup pending, cleanup finished). Account deletion also removes sign-in methods, sessions, and API keys, and the deleted account cannot sign in again. See [docs/data-map.md](docs/data-map.md).
 
 ## Stack
 
 Next.js 16.4 (App Router) · React 19.3 · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/SNS (or MinIO) · ClamAV · Docker Compose.
 
 Interactive API documentation is available at `/api/v1/docs`, with the OpenAPI 3.1 document at `/api/v1/openapi.json`. Signed-in users can create scoped keys, copy MCP configuration, or copy a ready-to-use coding-agent setup prompt from **API & MCP** in their workspace navigation.
-
-## Deploy on Railway
-
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new?template=https://github.com/jusso-dev/Recruvault&utm_medium=integration&utm_source=button&utm_campaign=recruvault)
-
-Recruvault ships `railway.json` and `Dockerfile.railway`. Railway builds the app image from that Dockerfile, invokes the migration and seed tools directly with Node as a pre-deploy command, and health-checks `/api/health`. Runtime images omit npm and Yarn; development commands remain available through npm locally.
-
-Wire these before the service can serve traffic:
-
-| Need | How |
-| --- | --- |
-| PostgreSQL | Add Railway Postgres and link it so `DATABASE_URL` is injected |
-| Object storage | Railway bucket or any S3-compatible store — set `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optional `S3_ENDPOINT` / `S3_FORCE_PATH_STYLE` |
-| Virus scanning | Point `CLAMAV_HOST` / `CLAMAV_PORT` at ClamAV (`SCAN_DISABLED=true` is refused in production) |
-| App secrets | Generate `BETTER_AUTH_SECRET` and `LOCAL_KEK` with `openssl rand -hex 32`; set `APP_URL` to the public domain Railway assigns |
-
-After the deployment is healthy, open the Recruvault domain and visit `/setup` to create the first owner account and organisation. Then set `ALLOW_RECRUITER_SIGNUP=false` on the Recruvault service to close recruiter self-registration. Configure `RESEND_API_KEY` and a verified `RESEND_FROM_EMAIL` before onboarding: production rejects email delivery without a provider instead of logging authentication links or OTPs. Background delivery and retention jobs require Inngest Cloud values for `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`.
 
 ## Local development
 
@@ -207,10 +190,12 @@ Email verification and password recovery use the same Resend configuration. Pass
 
 Set `BETTER_AUTH_SECRET`, `LOCAL_KEK`, and `BOOTSTRAP_TOKEN` (generate each with `openssl rand -hex 32`). `LOCAL_KEK` wraps legacy records and the explicit render delegation used so a secure link can show a shared document. New organisation and job-seeker records use a customer key that is enrolled in the product and is not the deployment key. Development ports bind to localhost. Production uses `docker-compose.prod.yml`, signed Inngest, and no default database or storage passwords. The production override does not start the Inngest dev server. See [docs/encryption.md](docs/encryption.md) and [docs/operations.md](docs/operations.md).
 
+The first owner is created at `/setup` with the operator-held `BOOTSTRAP_TOKEN`, after verifying their email; organisation creation and `/setup` stay closed to everyone else, and setup closes permanently once it succeeds. See [First-owner bootstrap](docs/operations.md#first-owner-bootstrap) for provisioning, retirement, and recovery, and [Key rotation](docs/operations.md#key-rotation) and [restore](docs/operations.md#restore-procedure) for the encryption-key lifecycle.
+
 ## Security posture
 
-- Customer encryption-key enrollment, rotation, document envelopes, and erasure behaviour are described in [docs/encryption.md](docs/encryption.md). This is not zero-knowledge: an unlocked session or a delegated API key lets the server decrypt. `LOCAL_KEK` still opens legacy rows and render-delegated shared documents.
-- Uploaded document bytes currently rely on private storage and optional storage-side encryption, rather than application-level document envelopes. Field crypto-shredding does not crypto-shred document bytes; see [document encryption](https://github.com/jusso-dev/Recruvault/issues/27) and [complete erasure](https://github.com/jusso-dev/Recruvault/issues/29).
+- Customer encryption-key enrollment, rotation, document envelopes, and erasure behaviour are described in [docs/encryption.md](docs/encryption.md). This is not zero-knowledge: an unlocked session or a delegated API key lets the server decrypt. `LOCAL_KEK` still opens legacy rows and the JDs and NDAs that are render-delegated to secure links; candidate evidence and wallet files are never delegated.
+- Uploaded documents are encrypted with per-document keys before they reach object storage, and shredding a document's key makes its stored object unreadable. Files uploaded before this release stay plaintext until the background migration encrypts them. Filenames, content types, and sizes remain database metadata. Backups taken before a deletion still contain that ciphertext and its wrapped keys until they expire; see [docs/data-map.md](docs/data-map.md).
 - Dependency maintenance and remaining advisories are documented in [SECURITY.md](SECURITY.md).
 - Handling classification: **OFFICIAL: Sensitive at most** — candidate-declared clearance information and career documents only, never classified material.
 - AU data residency by default (ap-southeast-2 for data and keys) when using AWS.

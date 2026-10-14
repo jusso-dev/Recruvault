@@ -9,9 +9,9 @@ import {
   requests,
 } from "@/db/schema";
 import { audit } from "@/lib/audit";
-import { requireCandidate, requireOrgUser, requestMeta } from "@/lib/guards";
+import { requestMeta, requireUnlockedOrg, requireUnlockedCandidate } from "@/lib/guards";
 import { EMPLOYMENT_TYPES, WORK_ARRANGEMENTS } from "@/lib/role-metadata";
-import { emitEvent } from "@/lib/outbox";
+import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
 import type { ActionResult } from "@/actions/org";
 
 function commaList(value: FormDataEntryValue | null, limit: number) {
@@ -26,26 +26,51 @@ function commaList(value: FormDataEntryValue | null, limit: number) {
 export async function updateRecruiterMatchSettings(
   formData: FormData,
 ): Promise<ActionResult> {
-  const ctx = await requireOrgUser("requests:create");
+  const ctx = await requireUnlockedOrg("requests:create");
   const enabled = formData.get("enabled") === "on";
   const minimumMatchScore = Number(formData.get("minimumMatchScore") ?? 50);
   if (!Number.isInteger(minimumMatchScore) || minimumMatchScore < 1 || minimumMatchScore > 100) {
     return { ok: false, error: "Choose a minimum match score between 1% and 100%." };
   }
 
-  await db
-    .insert(recruiterMatchSettings)
-    .values({
-      orgId: ctx.orgId,
-      enabled,
-      minimumMatchScore,
-      updatedBy: ctx.userId,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: recruiterMatchSettings.orgId,
-      set: { enabled, minimumMatchScore, updatedBy: ctx.userId, updatedAt: new Date() },
-    });
+  // Enabling re-evaluates every listed role. The settings row and its events
+  // commit together; the timestamp makes each enablement a distinct intent.
+  const changedAt = new Date();
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(recruiterMatchSettings)
+      .values({
+        orgId: ctx.orgId,
+        enabled,
+        minimumMatchScore,
+        updatedBy: ctx.userId,
+        updatedAt: changedAt,
+      })
+      .onConflictDoUpdate({
+        target: recruiterMatchSettings.orgId,
+        set: { enabled, minimumMatchScore, updatedBy: ctx.userId, updatedAt: changedAt },
+      });
+    if (!enabled) return;
+    const listedRoles = await tx
+      .select({ requestId: requests.id })
+      .from(requests)
+      .where(
+        and(
+          eq(requests.orgId, ctx.orgId),
+          eq(requests.listed, true),
+          inArray(requests.status, ["open", "closing_soon"]),
+        ),
+      );
+    for (const role of listedRoles) {
+      await enqueueEvent(
+        tx,
+        "job-alert/role-listed",
+        { requestId: role.requestId },
+        `job-alert/role-listed:${role.requestId}:settings:${changedAt.getTime()}`,
+        ctx.orgId,
+      );
+    }
+  });
 
   const meta = await requestMeta();
   await audit({
@@ -58,35 +83,14 @@ export async function updateRecruiterMatchSettings(
     ...meta,
   });
 
-  if (enabled) {
-    const listedRoles = await db
-      .select({ requestId: requests.id })
-      .from(requests)
-      .where(
-        and(
-          eq(requests.orgId, ctx.orgId),
-          eq(requests.listed, true),
-          inArray(requests.status, ["open", "closing_soon"]),
-        ),
-      );
-    if (listedRoles.length > 0) {
-      for (const role of listedRoles) {
-        await emitEvent(
-          "job-alert/role-listed",
-          { requestId: role.requestId },
-          `job-alert/role-listed:${role.requestId}`,
-          ctx.orgId,
-        );
-      }
-    }
-  }
+  await publishAfterCommit();
 
   revalidatePath("/dashboard/job-alerts");
   return { ok: true };
 }
 
 export async function updateJobAlertSubscription(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireCandidate();
+  const ctx = await requireUnlockedCandidate();
   const enabled = formData.get("enabled") === "on";
   const skills = commaList(formData.get("skills"), 30);
   const locations = commaList(formData.get("locations"), 10);
@@ -111,30 +115,42 @@ export async function updateJobAlertSubscription(formData: FormData): Promise<Ac
     return { ok: false, error: "Minimum salary or rate must be a whole positive number." };
   }
 
-  await db
-    .insert(jobAlertSubscriptions)
-    .values({
-      candidateAccountId: ctx.candidateAccountId,
-      enabled,
-      skills,
-      locations,
-      employmentTypes,
-      workArrangements,
-      minimumSalary,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: jobAlertSubscriptions.candidateAccountId,
-      set: {
+  const changedAt = new Date();
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(jobAlertSubscriptions)
+      .values({
+        candidateAccountId: ctx.candidateAccountId,
         enabled,
         skills,
         locations,
         employmentTypes,
         workArrangements,
         minimumSalary,
-        updatedAt: new Date(),
-      },
-    });
+        updatedAt: changedAt,
+      })
+      .onConflictDoUpdate({
+        target: jobAlertSubscriptions.candidateAccountId,
+        set: {
+          enabled,
+          skills,
+          locations,
+          employmentTypes,
+          workArrangements,
+          minimumSalary,
+          updatedAt: changedAt,
+        },
+      });
+    if (enabled) {
+      await enqueueEvent(
+        tx,
+        "job-alert/subscription-updated",
+        { candidateAccountId: ctx.candidateAccountId },
+        `job-alert/subscription-updated:${ctx.candidateAccountId}:${changedAt.getTime()}`,
+        ctx.candidateAccountId,
+      );
+    }
+  });
 
   const meta = await requestMeta();
   await audit({
@@ -146,14 +162,7 @@ export async function updateJobAlertSubscription(formData: FormData): Promise<Ac
     ...meta,
   });
 
-  if (enabled) {
-    await emitEvent(
-      "job-alert/subscription-updated",
-      { candidateAccountId: ctx.candidateAccountId },
-      `job-alert/subscription-updated:${ctx.candidateAccountId}:${Date.now()}`,
-      ctx.candidateAccountId,
-    );
-  }
+  await publishAfterCommit();
 
   revalidatePath("/roles");
   return { ok: true };

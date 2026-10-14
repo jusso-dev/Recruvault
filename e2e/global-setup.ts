@@ -5,17 +5,23 @@ import { Client } from "pg";
 
 export default async function globalSetup() {
   loadEnvConfig(process.cwd());
+  assertDisposableDatabase(process.env.DATABASE_URL);
 
-  execFileSync("docker", ["compose", "up", "db", "minio", "minio-init", "-d"], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: "inherit",
-  });
-  execFileSync("npm", ["run", "db:migrate"], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: "inherit",
-  });
+  // CI provides PostgreSQL and the object store as job services.
+  if (process.env.E2E_SKIP_SERVICES !== "1") {
+    execFileSync("docker", ["compose", "up", "db", "minio", "minio-init", "-d"], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: "inherit",
+    });
+  }
+  for (const script of ["db:migrate", "db:seed"]) {
+    execFileSync("npm", ["run", script], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: "inherit",
+    });
+  }
 
   mkdirSync(".playwright/auth", { recursive: true });
   rmSync(".playwright/outbox", { recursive: true, force: true });
@@ -63,5 +69,21 @@ export default async function globalSetup() {
     await client.query(`delete from organisations where slug = 'e2e-platform-bootstrap'`);
   } finally {
     await client.end();
+  }
+}
+
+/**
+ * Cleanup below deletes rows. Refuse anything but a local database unless the
+ * operator explicitly marks a remote one as disposable.
+ */
+function assertDisposableDatabase(url: string | undefined) {
+  if (!url) throw new Error("DATABASE_URL is required for browser tests.");
+  const host = new URL(url).hostname;
+  const local = ["localhost", "127.0.0.1", "::1", "[::1]", "db"].includes(host);
+  if (!local && process.env.E2E_ALLOW_REMOTE_DB !== "1") {
+    throw new Error("Refusing to run browser-test cleanup against a non-local DATABASE_URL.");
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("Refusing to run browser tests with NODE_ENV=production.");
   }
 }

@@ -2,10 +2,16 @@ import "server-only";
 import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
 import { db } from "@/db";
 import { smsEvents } from "@/db/schema";
+import { getLogger } from "@/lib/logger";
+
+const log = getLogger("sms");
 
 /**
  * SMS delivery via AWS SNS with per-tenant usage tracking. Only the last
- * three digits of the recipient number are recorded in sms_events.
+ * three digits of the recipient number are recorded in sms_events. The
+ * message body carries a secure link, so it is never logged.
+ *
+ * @returns true when SNS accepted the message, false when SMS is disabled.
  */
 
 let sns: SNSClient | undefined;
@@ -18,16 +24,17 @@ export async function sendSms(opts: {
   orgId: string;
   to: string; // E.164
   message: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const suffix = opts.to.slice(-3);
   if (process.env.SMS_ENABLED !== "true") {
-    console.warn(`[sms:dev] to=***${suffix} message="${opts.message}"`);
+    const status = process.env.NODE_ENV === "production" ? "skipped_disabled" : "skipped_dev";
+    log.info({ orgId: opts.orgId, status }, "sms not sent (SMS_ENABLED is not true)");
     await db.insert(smsEvents).values({
       orgId: opts.orgId,
       recipientSuffix: suffix,
-      status: "skipped_dev",
+      status,
     });
-    return;
+    return false;
   }
 
   try {
@@ -45,6 +52,7 @@ export async function sendSms(opts: {
       recipientSuffix: suffix,
       status: "sent",
     });
+    return true;
   } catch (err) {
     await db.insert(smsEvents).values({
       orgId: opts.orgId,

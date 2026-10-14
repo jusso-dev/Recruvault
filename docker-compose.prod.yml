@@ -4,6 +4,9 @@
 # This file removes development port publishing, the Inngest dev server, and
 # default database or object-storage passwords. Supply every secret at runtime.
 # Do not put those values in the Compose file or the image.
+#
+# Only the app is published, on 127.0.0.1:3000 for a TLS reverse proxy on the
+# same host. PostgreSQL, MinIO, and ClamAV stay on the internal network.
 
 services:
   app:
@@ -22,6 +25,25 @@ services:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?set INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?set INNGEST_SIGNING_KEY}
       ALLOW_RECRUITER_SIGNUP: "false"
+      TRUSTED_DOMAINS: ${TRUSTED_DOMAINS:?set TRUSTED_DOMAINS}
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
 
   db:
     ports: !override []
@@ -33,13 +55,17 @@ services:
   minio:
     ports: !override []
     environment:
-      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID}
-      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
 
+  # The app receives AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY for a MinIO user
+  # limited to the documents bucket, never the root credentials.
   minio-init:
     environment:
-      MINIO_USER: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID}
-      MINIO_PASS: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY}
+      MINIO_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_PASS: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      APP_KEY: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID}
+      APP_SECRET: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY}
 
   inngest:
     profiles: ["never"]

@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { db } from "@/db";
 import { candidateAccounts, memberships, organisations, user } from "@/db/schema";
 import { can, type OrgRole, type Permission } from "@/lib/rbac";
+import { clientIp } from "@/lib/client-ip";
 
 /**
  * Data-layer authorisation. Every server action and route handler resolves
@@ -180,6 +181,67 @@ export async function requireCandidate(): Promise<CandidateContext> {
   };
 }
 
+export interface UnlockedVault {
+  crk: Buffer;
+  vaultKeyId: string;
+  vaultVersion: number;
+}
+
+/**
+ * Vault enforcement for Server Actions and route handlers. "Enrolled" is
+ * required for every workspace action; "unlocked" additionally requires this
+ * session to hold the customer key, and is used wherever protected data is
+ * read, written, encrypted, or a capability (link, share, key) is issued.
+ * Revocation and deletion only need enrolment so they stay possible while
+ * locked.
+ */
+async function vaultFor(ownerType: "organisation" | "candidate", ownerId: string) {
+  const { activeVault } = await import("@/lib/vault-store");
+  const vault = await activeVault(ownerType, ownerId);
+  if (!vault) throw new AuthError("Encryption enrollment is required.");
+  return vault;
+}
+
+async function unlockedVaultFor(
+  ownerType: "organisation" | "candidate",
+  ownerId: string,
+): Promise<UnlockedVault> {
+  const vault = await vaultFor(ownerType, ownerId);
+  const { readUnlockedCustomerKey } = await import("@/lib/vault-session");
+  const crk = await readUnlockedCustomerKey(ownerType, ownerId);
+  if (!crk) throw new AuthError("Unlock the encryption key before continuing.");
+  return { crk, vaultKeyId: vault.id, vaultVersion: vault.version };
+}
+
+export async function requireEnrolledOrg(permission?: Permission): Promise<OrgContext> {
+  const ctx = await requireOrgUser(permission);
+  await vaultFor("organisation", ctx.orgId);
+  return ctx;
+}
+
+export async function requireUnlockedOrg(
+  permission?: Permission,
+): Promise<OrgContext & UnlockedVault> {
+  const ctx = await requireOrgUser(permission);
+  return { ...ctx, ...(await unlockedVaultFor("organisation", ctx.orgId)) };
+}
+
+export async function requireEnrolledCandidate(): Promise<CandidateContext> {
+  const ctx = await requireCandidate();
+  await vaultFor("candidate", ctx.candidateAccountId);
+  return ctx;
+}
+
+export async function requireUnlockedCandidate(): Promise<CandidateContext & UnlockedVault> {
+  const ctx = await requireCandidate();
+  return { ...ctx, ...(await unlockedVaultFor("candidate", ctx.candidateAccountId)) };
+}
+
+/** Recent sign-in for sensitive key operations (rotation, cancellation). */
+export function sessionIsFresh(session: { session: { createdAt: Date | string } }, maxAgeMs = 15 * 60 * 1000) {
+  return Date.now() - new Date(session.session.createdAt).getTime() <= maxAgeMs;
+}
+
 /** Assert a row belongs to the caller's organisation. */
 export async function assertOrgMembershipRole(
   orgId: string,
@@ -195,8 +257,10 @@ export async function assertOrgMembershipRole(
 
 export async function requestMeta() {
   const h = await headers();
+  // Same trusted-proxy rule as API rate limiting; null when no usable address.
+  const ip = clientIp(h);
   return {
-    ip: h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+    ip: ip === "unknown" || ip === "untrusted" ? null : ip,
     userAgent: h.get("user-agent"),
   };
 }

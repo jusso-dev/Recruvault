@@ -5,6 +5,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { magicLink } from "better-auth/plugins";
 import { passkey } from "@better-auth/passkey";
 import { nextCookies } from "better-auth/next-js";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
   user,
@@ -80,10 +81,45 @@ export const auth = betterAuth({
   },
   user: {
     additionalFields: {
+      // Server-assigned only. Clients cannot set it on sign-up or update-user;
+      // the user create hook below and first-owner setup are the only writers.
       accountType: {
         type: "string",
         defaultValue: "seeker",
-        input: true,
+        input: false,
+      },
+    },
+  },
+  databaseHooks: {
+    user: {
+      create: {
+        // Recruiter self-registration is honoured only when the deployment
+        // enables it; the hooks.before check below rejects it otherwise.
+        before: async (u, ctx) => {
+          const requested = (ctx?.body as { accountType?: unknown } | undefined)?.accountType;
+          if (ctx?.path === "/sign-up/email" && requested === "org" && recruiterSignupEnabled()) {
+            return { data: { ...u, accountType: "org" } };
+          }
+          return { data: { ...u, accountType: "seeker" } };
+        },
+      },
+    },
+    session: {
+      create: {
+        // Every sign-in path (password, magic link, passkey) creates a session
+        // here. An erased account's tombstone can never get one.
+        before: async (s) => {
+          const [row] = await db
+            .select({ erasedAt: user.erasedAt })
+            .from(user)
+            .where(eq(user.id, s.userId));
+          if (row?.erasedAt) {
+            throw APIError.from("FORBIDDEN", {
+              code: "ACCOUNT_DELETED",
+              message: "This account has been deleted.",
+            });
+          }
+        },
       },
     },
   },

@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # npm devDependencies are skipped by default; tooling advisories must show up.
+  TRIVY_INCLUDE_DEV_DEPS: "true"
+
 jobs:
   trivy:
     name: Scan repository
@@ -22,11 +26,13 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Scan dependencies, secrets, and IaC
+      # Report every high/critical finding, including ones with no fixed
+      # version, so unresolved advisories stay visible in code scanning.
+      - name: Scan dependencies, secrets, and IaC (report)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
@@ -36,12 +42,92 @@ jobs:
           output: trivy-results.sarif
           severity: HIGH,CRITICAL
           limit-severities-for-sarif: true
-          ignore-unfixed: true
-          exit-code: "1"
+          exit-code: "0"
 
       - name: Upload code scanning results
         if: always() && hashFiles('trivy-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: trivy-results.sarif
           category: trivy
+
+      # Fail only on findings that have a fixed version available.
+      - name: Gate on fixable high/critical findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
+
+  images:
+    name: Scan ${{ matrix.target }} image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: runner
+            dockerfile: Dockerfile
+          - target: migrate
+            dockerfile: Dockerfile
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: docker build -f "${{ matrix.dockerfile }}" --target "${{ matrix.target }}" -t "recruvault-scan:${{ matrix.target }}" .
+
+      # The build must not bake environment files or deployment secrets into
+      # any layer.
+      - name: Check image for environment files
+        run: |
+          docker save "recruvault-scan:${{ matrix.target }}" -o image.tar
+          mkdir layers && tar -xf image.tar -C layers
+          found=0
+          while IFS= read -r layer; do
+            if tar -tf "$layer" 2>/dev/null | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$'; then found=1; fi
+          done < <(find layers -type f \( -name '*.tar' -o -name 'layer' -o -path '*/blobs/sha256/*' \))
+          rm -rf layers image.tar
+          if [ "$found" = 1 ]; then echo "::error::An .env file is present in an image layer."; exit 1; fi
+
+      - name: Scan image (report)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: recruvault-scan:${{ matrix.target }}
+          scanners: vuln,secret
+          format: sarif
+          output: trivy-image.sarif
+          severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
+          exit-code: "0"
+
+      - name: Upload image scan results
+        if: always() && hashFiles('trivy-image.sarif') != ''
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image-${{ matrix.target }}-${{ matrix.dockerfile }}
+
+      - name: Gate on fixable high/critical image findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: recruvault-scan:${{ matrix.target }}
+          scanners: vuln,secret
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true

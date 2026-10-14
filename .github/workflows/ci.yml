@@ -12,16 +12,22 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  POSTGRES_IMAGE: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+  MINIO_IMAGE: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+  MC_IMAGE: pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
+
 jobs:
   check:
     name: Lint, typecheck, build, test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -30,6 +36,11 @@ jobs:
 
       - name: Audit runtime dependencies
         run: npm audit --omit=dev
+
+      # Development-tool findings are reported, not hidden. Known unfixed
+      # advisories are tracked in SECURITY.md.
+      - name: Report full dependency audit
+        run: npm audit || true
 
       - name: Lint
         run: npm run lint
@@ -40,7 +51,7 @@ jobs:
       - name: Migration drift check
         run: |
           npx drizzle-kit generate
-          if ! git diff --exit-code drizzle; then
+          if ! git diff --exit-code drizzle || [ -n "$(git status --porcelain drizzle)" ]; then
             echo "::error::Schema and migrations are out of sync. Run 'npm run db:generate' and commit the result."
             exit 1
           fi
@@ -58,34 +69,176 @@ jobs:
           S3_BUCKET: ci-placeholder
 
   integration:
-    name: Integration tests (Testcontainers)
-    runs-on: ubuntu-latest
+    name: Integration tests (PostgreSQL + object store)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        env:
+          POSTGRES_USER: it
+          POSTGRES_PASSWORD: it-only
+          POSTGRES_DB: postgres
+        ports: ["127.0.0.1:5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U it" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      INTEGRATION_DATABASE_URL: postgres://it:it-only@127.0.0.1:5432/postgres
+      INTEGRATION_S3_ENDPOINT: http://127.0.0.1:9000
+      INTEGRATION_S3_ACCESS_KEY_ID: it-minio
+      INTEGRATION_S3_SECRET_ACCESS_KEY: it-minio-secret
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
+
+      - name: Start object store
+        run: |
+          docker run -d --name minio -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER="$INTEGRATION_S3_ACCESS_KEY_ID" \
+            -e MINIO_ROOT_PASSWORD="$INTEGRATION_S3_SECRET_ACCESS_KEY" \
+            "$MINIO_IMAGE" server /data
+          timeout 60 sh -c 'until curl -sf http://127.0.0.1:9000/minio/health/live; do sleep 1; done'
 
       - run: npm ci
 
       - name: Integration tests
         run: npm run test:integration
 
+  e2e:
+    name: Browser tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        env:
+          POSTGRES_USER: recruvault
+          POSTGRES_PASSWORD: e2e-only
+          POSTGRES_DB: recruvault_e2e
+        ports: ["127.0.0.1:5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U recruvault" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # Services are provided here; global setup must not start Compose.
+      E2E_SKIP_SERVICES: "1"
+      DATABASE_URL: postgres://recruvault:e2e-only@127.0.0.1:5432/recruvault_e2e
+      BETTER_AUTH_SECRET: e2e-only-better-auth-secret-0123456789abcdef
+      LOCAL_KEK: "5e2a0b7c9d1f3e4a6b8c0d2e4f6a8b0c1d3e5f7a9b2c4d6e8f0a1b3c5d7e9f10"
+      AWS_REGION: ap-southeast-2
+      AWS_ACCESS_KEY_ID: e2e-minio
+      AWS_SECRET_ACCESS_KEY: e2e-minio-secret
+      S3_BUCKET: recruvault-e2e
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_FORCE_PATH_STYLE: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Start object store
+        run: |
+          docker run -d --name minio -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" \
+            -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
+            "$MINIO_IMAGE" server /data
+          timeout 60 sh -c 'until curl -sf http://127.0.0.1:9000/minio/health/live; do sleep 1; done'
+          docker run --rm --network host --entrypoint /bin/sh \
+            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e S3_BUCKET "$MC_IMAGE" -ec \
+            'mc alias set local http://127.0.0.1:9000 "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" >/dev/null && mc mb --ignore-existing "local/$S3_BUCKET"'
+
+      - run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Traces, screenshots, and videos can show encryption keys and
+      # authentication links, so no browser artifacts are uploaded.
+      - name: Browser tests
+        run: npm run test:e2e -- --trace off
+        env:
+          CI: "true"
+
+  production-smoke:
+    name: Production smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        env:
+          POSTGRES_USER: smoke
+          POSTGRES_PASSWORD: smoke-only-password
+          POSTGRES_DB: recruvault_smoke
+        ports: ["127.0.0.1:5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U smoke" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+          BETTER_AUTH_SECRET: ci-placeholder-secret-at-least-32-chars
+          S3_BUCKET: ci-placeholder
+
+      - name: Migrate
+        run: npx drizzle-kit migrate
+        env:
+          DATABASE_URL: postgres://smoke:smoke-only-password@127.0.0.1:5432/recruvault_smoke
+
+      - name: Smoke test standalone server
+        run: |
+          # Fresh random values per run; none of them are printed.
+          BETTER_AUTH_SECRET="$(openssl rand -hex 32)"
+          LOCAL_KEK="$(openssl rand -hex 32)"
+          BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
+          export BETTER_AUTH_SECRET LOCAL_KEK BOOTSTRAP_TOKEN
+          node scripts/smoke-production.mjs
+        env:
+          DATABASE_URL: postgres://smoke:smoke-only-password@127.0.0.1:5432/recruvault_smoke
+          APP_URL: https://vault.example.org
+          S3_BUCKET: smoke
+          S3_ENDPOINT: http://127.0.0.1:9
+          AWS_ACCESS_KEY_ID: smoke-access
+          AWS_SECRET_ACCESS_KEY: smoke-secret-value
+          INNGEST_EVENT_KEY: smoke-event
+          INNGEST_SIGNING_KEY: signkey-prod-0123456789abcdef
+          RESEND_API_KEY: re_smoke_invalid
+          RESEND_FROM_EMAIL: vault@example.org
+
   mcp:
-    name: MCP install, audit, and syntax
-    runs-on: ubuntu-latest
+    name: MCP install, audit, and protocol tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: mcp
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -93,3 +246,5 @@ jobs:
       - run: npm ci
       - run: npm audit
       - run: node --check index.mjs
+      - name: Protocol tests against a mock REST server
+        run: npm test

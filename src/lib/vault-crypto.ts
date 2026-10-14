@@ -22,7 +22,18 @@ import {
  */
 
 export const CRK_BYTES = 32;
-export const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
+
+export interface KdfParams {
+  N: number;
+  r: number;
+  p: number;
+  version: number;
+}
+
+// Version 2 is used for new passphrase enrolments. Version 1 (N=2^14) is
+// accepted only when an existing vault row stores it.
+export const SCRYPT_PARAMS: KdfParams = { N: 131072, r: 8, p: 1, version: 2 };
+const SCRYPT_V1: KdfParams = { N: 16384, r: 8, p: 1, version: 1 };
 
 export class VaultCryptoError extends Error {
   constructor(message: string) {
@@ -45,6 +56,21 @@ export function parseCustomerKey(value: string): Buffer {
   return buf;
 }
 
+/**
+ * Reject imported keys that are obviously not random: few distinct bytes, a
+ * short repeating pattern, or a constant step (00 01 02 …). A uniformly random
+ * 256-bit key fails these checks with negligible probability.
+ */
+export function assertStrongCustomerKey(key: Buffer): void {
+  const weak = new VaultCryptoError("That key is not random enough. Generate a new key instead.");
+  if (new Set(key).size < 16) throw weak;
+  for (let period = 1; period <= key.length / 2; period += 1) {
+    if (key.every((byte, i) => i < period || byte === key[i - period])) throw weak;
+  }
+  const step = (key[1] - key[0] + 256) % 256;
+  if (key.every((byte, i) => i === 0 || (byte - key[i - 1] + 256) % 256 === step)) throw weak;
+}
+
 export function customerKeyVerifier(crk: Buffer, ownerType: string, ownerId: string): string {
   return createHmac("sha256", crk)
     .update(`recruvault.verifier.v1|${ownerType}|${ownerId}`)
@@ -62,12 +88,27 @@ export function verifierMatches(
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-export function derivePassphraseKey(passphrase: string, salt: Buffer): Buffer {
+/** Bounds stop a tampered kdf_params row from forcing a weak or abusive derivation. */
+function scryptOptions(params: KdfParams | null | undefined) {
+  const chosen = params ?? SCRYPT_V1;
+  const { N, r, p } = chosen;
+  const powerOfTwo = Number.isInteger(N) && N > 0 && (N & (N - 1)) === 0;
+  if (!powerOfTwo || N < SCRYPT_V1.N || N > 2 ** 20 || r < 8 || r > 16 || p < 1 || p > 4) {
+    throw new VaultCryptoError("Passphrase parameters are invalid.");
+  }
+  return { N, r, p, maxmem: 256 * N * r + 1024 * 1024 };
+}
+
+export function derivePassphraseKey(
+  passphrase: string,
+  salt: Buffer,
+  params: KdfParams | null = SCRYPT_PARAMS,
+): Buffer {
   if (passphrase.length < 12) {
     throw new VaultCryptoError("Passphrase must be at least 12 characters.");
   }
   if (salt.length < 16) throw new VaultCryptoError("Passphrase salt is invalid.");
-  return scryptSync(passphrase, salt, CRK_BYTES, SCRYPT_PARAMS);
+  return scryptSync(passphrase, salt, CRK_BYTES, scryptOptions(params));
 }
 
 export function generateKdfSalt(): string {
@@ -134,8 +175,14 @@ export function fieldAad(ownerType: string, ownerId: string, dekId: string, purp
   return `field|${ownerType}|${ownerId}|${dekId}|${purpose}|v${version}`;
 }
 
-export function documentAad(ownerType: string, ownerId: string, documentId: string, purpose: string) {
-  return `document|${ownerType}|${ownerId}|${documentId}|${purpose}|v1`;
+export function documentAad(
+  ownerType: string,
+  ownerId: string,
+  documentId: string,
+  purpose: string,
+  version = 1,
+) {
+  return `document|${ownerType}|${ownerId}|${documentId}|${purpose}|v${version}`;
 }
 
 export function privateKeyAad(ownerType: string, ownerId: string, version: number) {

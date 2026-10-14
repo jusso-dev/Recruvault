@@ -1,8 +1,11 @@
 import "server-only";
-import { and, eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
+import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  accessTokens,
   candidateAccounts,
+  deliveries,
   discoveryProfiles,
   requestFields,
   requests,
@@ -11,7 +14,8 @@ import {
 } from "@/db/schema";
 import type { OrgContext } from "@/lib/guards";
 import { audit } from "@/lib/audit";
-import { emitEvent } from "@/lib/outbox";
+import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
+import { deliveryLinkToken } from "@/lib/link-token";
 import {
   fieldDefinition,
   DEFAULT_REQUEST_FIELD_KEYS,
@@ -102,44 +106,58 @@ export async function createRequestCore(
     throw new ApiError(400, "Select at least one field to request.");
   }
 
-  const [request] = await db
-    .insert(requests)
-    .values({
-      orgId: ctx.orgId,
-      createdBy: ctx.userId,
-      title,
-      description: input.description ?? null,
-      location: input.location ?? null,
-      employmentType: input.employmentType ?? null,
-      workArrangement: input.workArrangement ?? null,
-      salaryMin: input.salaryMin ?? null,
-      salaryMax: input.salaryMax ?? null,
-      salaryPeriod: input.salaryPeriod ?? null,
-      skills,
-      status: "open",
-      listed: input.listed ?? false,
-      expiresAt: input.expiresAt ?? null,
-      consentRequired: true,
-      consentPurpose: input.consentPurpose ?? null,
-      jdViewMode: input.jdViewMode ?? "view_only",
-    })
-    .returning({ id: requests.id });
+  const request = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(requests)
+      .values({
+        orgId: ctx.orgId,
+        createdBy: ctx.userId,
+        title,
+        description: input.description ?? null,
+        location: input.location ?? null,
+        employmentType: input.employmentType ?? null,
+        workArrangement: input.workArrangement ?? null,
+        salaryMin: input.salaryMin ?? null,
+        salaryMax: input.salaryMax ?? null,
+        salaryPeriod: input.salaryPeriod ?? null,
+        skills,
+        status: "open",
+        listed: input.listed ?? false,
+        expiresAt: input.expiresAt ?? null,
+        consentRequired: true,
+        consentPurpose: input.consentPurpose ?? null,
+        jdViewMode: input.jdViewMode ?? "view_only",
+      })
+      .returning({ id: requests.id });
 
-  let sortOrder = 0;
-  for (const key of keys) {
-    const def = fieldDefinition(key);
-    if (!def) continue;
-    await db.insert(requestFields).values({
-      requestId: request.id,
-      key: def.key,
-      type: def.type,
-      label: def.label,
-      helpText: def.helpText,
-      required: true,
-      sensitive: def.sensitive,
-      sortOrder: sortOrder++,
-    });
-  }
+    let sortOrder = 0;
+    for (const key of keys) {
+      const def = fieldDefinition(key);
+      if (!def) continue;
+      await tx.insert(requestFields).values({
+        requestId: inserted.id,
+        key: def.key,
+        type: def.type,
+        label: def.label,
+        helpText: def.helpText,
+        required: true,
+        sensitive: def.sensitive,
+        sortOrder: sortOrder++,
+      });
+    }
+
+    if ((input.listed ?? false) && skills.length > 0) {
+      await enqueueEvent(
+        tx,
+        "job-alert/role-listed",
+        { requestId: inserted.id },
+        `job-alert/role-listed:${inserted.id}:created`,
+        ctx.orgId,
+      );
+    }
+    return inserted;
+  });
+
   await audit({
     orgId: ctx.orgId,
     actorType: "org_user",
@@ -148,15 +166,7 @@ export async function createRequestCore(
     targetType: "request",
     targetId: request.id,
   });
-
-  if ((input.listed ?? false) && skills.length > 0) {
-    await emitEvent(
-      "job-alert/role-listed",
-      { requestId: request.id },
-      `job-alert/role-listed:${request.id}`,
-      ctx.orgId,
-    );
-  }
+  await publishAfterCommit();
 
   return request.id;
 }
@@ -212,10 +222,92 @@ export async function sendRequestCore(
     .where(eq(suppressions.email, email));
   if (suppressed) throw new ApiError(409, "That address is suppressed (previously bounced).");
 
-  await emitEvent(
-    "request/send",
-    { requestId, recipientEmail: email, sentBy: ctx.userId },
-    `request/send:${requestId}:${email.toLowerCase()}`,
-    ctx.orgId,
-  );
+  await queueRequestDelivery({
+    orgId: ctx.orgId,
+    sentBy: ctx.userId,
+    request,
+    recipientEmail: email,
+  });
+}
+
+const DEFAULT_LINK_TTL_DAYS = 14;
+const RETRY_WINDOW_MS = 2 * 60_000;
+
+/**
+ * Commit the access token, the queued delivery, and its `request/send` event
+ * in one transaction. The event carries only ids. Retrying the same send
+ * within two minutes returns the already queued delivery instead of a second
+ * invitation; a later deliberate re-send queues a new one.
+ */
+export async function queueRequestDelivery(opts: {
+  orgId: string;
+  sentBy: string;
+  request: { id: string; expiresAt: Date | null };
+  recipientEmail: string;
+  recipientPhone?: string | null;
+  ip?: string | null;
+  userAgent?: string | null;
+}): Promise<{ deliveryId: string; accessTokenId: string; duplicate: boolean }> {
+  const email = opts.recipientEmail.trim().toLowerCase();
+  const queued = await db.transaction(async (tx) => {
+    // Serialise concurrent submits for the same recipient so a double click
+    // cannot slip two deliveries past the retry check.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`delivery:${opts.request.id}:${email}`}))`);
+    const [recent] = await tx
+      .select({ id: deliveries.id, accessTokenId: deliveries.accessTokenId })
+      .from(deliveries)
+      .where(
+        and(
+          eq(deliveries.requestId, opts.request.id),
+          eq(deliveries.channel, "email"),
+          eq(deliveries.recipient, email),
+          gt(deliveries.createdAt, new Date(Date.now() - RETRY_WINDOW_MS)),
+        ),
+      );
+    if (recent) return { deliveryId: recent.id, accessTokenId: recent.accessTokenId, duplicate: true };
+
+    const accessTokenId = randomUUID();
+    await tx.insert(accessTokens).values({
+      id: accessTokenId,
+      requestId: opts.request.id,
+      tokenHash: deliveryLinkToken(accessTokenId).tokenHash,
+      recipientEmail: email,
+      recipientPhone: opts.recipientPhone || null,
+      expiresAt:
+        opts.request.expiresAt ?? new Date(Date.now() + DEFAULT_LINK_TTL_DAYS * 24 * 60 * 60 * 1000),
+    });
+    const [delivery] = await tx
+      .insert(deliveries)
+      .values({
+        requestId: opts.request.id,
+        accessTokenId,
+        channel: "email",
+        recipient: email,
+        status: "queued",
+      })
+      .returning({ id: deliveries.id });
+    await enqueueEvent(
+      tx,
+      "request/send",
+      { requestId: opts.request.id, deliveryId: delivery.id, sentBy: opts.sentBy },
+      `request/send:${delivery.id}`,
+      opts.orgId,
+    );
+    return { deliveryId: delivery.id, accessTokenId, duplicate: false };
+  });
+
+  if (!queued.duplicate) {
+    await audit({
+      orgId: opts.orgId,
+      actorType: "org_user",
+      actorId: opts.sentBy,
+      action: "request.sent",
+      targetType: "access_token",
+      targetId: queued.accessTokenId,
+      ip: opts.ip,
+      userAgent: opts.userAgent,
+    });
+  }
+  await publishAfterCommit();
+  return queued;
 }

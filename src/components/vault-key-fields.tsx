@@ -3,19 +3,9 @@
 import { useState } from "react";
 import { Button, Input, Label } from "@/components/ui";
 
-function browserSalt() {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  let binary = "";
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-
 export function VaultKeyFields() {
   const [mode, setMode] = useState<"generated" | "import" | "passphrase">("generated");
   const [key, setKey] = useState("");
-  const [salt] = useState(browserSalt);
 
   function generate() {
     const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -53,7 +43,6 @@ export function VaultKeyFields() {
       </div>
       {mode === "passphrase" ? (
         <>
-          <input type="hidden" name="kdfSalt" value={salt} />
           <div>
             <Label htmlFor="passphrase">Passphrase</Label>
             <Input id="passphrase" name="passphrase" type="password" required minLength={12} autoComplete="new-password" />

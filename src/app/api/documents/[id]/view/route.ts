@@ -11,10 +11,26 @@ import {
 } from "@/db/schema";
 import { requireOrgUser, requestMeta, AuthError } from "@/lib/guards";
 import { readLinkSession } from "@/lib/link-session";
-import { readProtectedDocument } from "@/lib/document-protect";
+import { DocumentAccessError, readProtectedDocument } from "@/lib/document-protect";
 import { audit } from "@/lib/audit";
 import { can } from "@/lib/rbac";
 import { watermarkPdf } from "@/lib/watermark";
+
+/**
+ * Map a failed decrypt to a response without leaking which check failed beyond
+ * what the viewer can act on. Integrity failures are server errors, never an
+ * empty or partial document.
+ */
+function documentFailure(err: unknown) {
+  if (!(err instanceof DocumentAccessError)) throw err;
+  if (err.reason === "locked") {
+    return NextResponse.json({ error: "Unlock the encryption key to view this document." }, { status: 409 });
+  }
+  if (err.reason === "shredded" || err.reason === "missing") {
+    return NextResponse.json({ error: "This document has been deleted." }, { status: 410 });
+  }
+  return NextResponse.json({ error: "The document could not be opened." }, { status: 500 });
+}
 
 /**
  * Authorised document streaming. There are no public URLs: every render goes
@@ -158,33 +174,20 @@ export async function GET(
   // (the sanctioned clean copy). Non-PDFs stream as-is.
   const mediaType = doc.originalContentType || doc.contentType;
   const isPdf = mediaType === "application/pdf";
-  let plaintext: Buffer | null = null;
-  const loadPlaintext = async () => {
-    if (!plaintext) {
-      try {
-        plaintext = (
-          await readProtectedDocument(
-            {
-              ...doc,
-              ownerType: "organisation",
-              ownerId: doc.orgId ?? "",
-            },
-            { renderDelegation },
-          )
-        ).bytes;
-      } catch {
-        plaintext = Buffer.alloc(0);
-      }
-    }
-    return plaintext;
-  };
+  let plaintext: Buffer;
+  try {
+    plaintext = (
+      await readProtectedDocument(
+        { ...doc, ownerType: "organisation", ownerId: doc.orgId ?? "" },
+        { renderDelegation },
+      )
+    ).bytes;
+  } catch (err) {
+    return documentFailure(err);
+  }
   if (!wantsDownload && doc.watermarkRequired && isPdf) {
-    const original = await loadPlaintext();
-    if (original.length === 0) {
-      return NextResponse.json({ error: "Unlock the encryption key to view this document." }, { status: 409 });
-    }
     const label = `Recruvault · ${viewerLabel || "authorised viewer"} · ${new Date().toISOString()} · Confidential`;
-    const stamped = await watermarkPdf(original, label);
+    const stamped = await watermarkPdf(plaintext, label);
     return new NextResponse(stamped as unknown as BodyInit, {
       headers: {
         ...commonHeaders,
@@ -194,17 +197,13 @@ export async function GET(
     });
   }
 
-  const body = await loadPlaintext();
-  if (body.length === 0) {
-    return NextResponse.json({ error: "Unlock the encryption key to view this document." }, { status: 409 });
-  }
   const safeName = doc.fileName.replace(/[\r\n"]/g, "");
   const disposition =
     wantsDownload || !isPdf
       ? `attachment; filename="${safeName}"`
       : `inline; filename="${safeName}"`;
 
-  return new NextResponse(body as unknown as BodyInit, {
+  return new NextResponse(plaintext as unknown as BodyInit, {
     headers: {
       ...commonHeaders,
       "Content-Type": mediaType,

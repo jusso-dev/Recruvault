@@ -1,17 +1,21 @@
 "use server";
 
 import { createHash } from "crypto";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { memberships, organisations, platformBootstrap, user } from "@/db/schema";
+import { candidateAccounts, memberships, organisations, platformBootstrap, user } from "@/db/schema";
 import { audit } from "@/lib/audit";
 import { tokenMatches } from "@/lib/crypto";
 import { getSession, requestMeta } from "@/lib/guards";
+import { BOOTSTRAP_LOCK } from "@/lib/platform-bootstrap";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { readEnrollmentKey } from "@/lib/vault-enrollment";
-import { insertVaultKey } from "@/lib/vault-store";
+import { readEnrollmentKey, readUnlockKey } from "@/lib/vault-enrollment";
+import { activeVault, insertVaultKey } from "@/lib/vault-store";
 import { establishVaultUnlock } from "@/lib/vault-session";
+import { verifierMatches } from "@/lib/vault-crypto";
 import type { ActionResult } from "@/actions/org";
+
+const WINDOW_MS = 15 * 60 * 1000;
 
 function organisationSlug(name: string): string {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -19,22 +23,30 @@ function organisationSlug(name: string): string {
   return `${base || "organisation"}-${suffix}`;
 }
 
-async function capabilityOk(presented: string, expected: string | undefined, ip: string) {
-  const allowed = await checkRateLimit(`bootstrap:${ip || "unknown"}`, 5, 15 * 60 * 1000);
-  if (!allowed) return "Too many setup attempts. Wait and try again.";
-  if (!expected || expected.length < 32 || !tokenMatches(presented, expected)) {
-    return "The bootstrap token is not valid.";
-  }
-  return null;
+/**
+ * Throttle per client and globally: x-forwarded-for can be rotated, so a
+ * deployment-wide budget caps total guesses regardless of claimed source.
+ */
+async function attemptAllowed(ip: string | null) {
+  const perClient = await checkRateLimit(`bootstrap:${ip || "unknown"}`, 5, WINDOW_MS);
+  const global = await checkRateLimit("bootstrap:global", 30, WINDOW_MS);
+  return perClient && global;
 }
 
-/** Complete the one-time platform bootstrap after the owner verifies their email. */
+function capabilityOk(presented: string, expected: string | undefined) {
+  return Boolean(expected && expected.length >= 32 && presented && tokenMatches(presented, expected));
+}
+
+/**
+ * Complete the one-time platform bootstrap. The caller must hold a verified
+ * BetterAuth session (verification comes from the emailed link, never from
+ * this action) and the operator's BOOTSTRAP_TOKEN. The account type, the
+ * organisation, the owner membership, the vault key, and the consumed
+ * bootstrap row are written in one transaction under an advisory lock.
+ */
 export async function completePlatformSetup(formData: FormData): Promise<ActionResult> {
   const session = await getSession();
-  if (!session) return { ok: false, error: "Your account was created, but the session could not be started. Sign in and try again." };
-  if ((session.user as { accountType?: string }).accountType !== "org") {
-    return { ok: false, error: "A recruiter account is required for setup." };
-  }
+  if (!session) return { ok: false, error: "Sign in with the account you created, then continue setup." };
   if (!(session.user as { emailVerified?: boolean }).emailVerified) {
     return { ok: false, error: "Verify your email address before continuing." };
   }
@@ -42,41 +54,46 @@ export async function completePlatformSetup(formData: FormData): Promise<ActionR
   const firstName = String(formData.get("firstName") ?? "").trim();
   const lastName = String(formData.get("lastName") ?? "").trim();
   const organisationName = String(formData.get("organisationName") ?? "").trim();
-  if (!organisationName) return { ok: false, error: "Enter your organisation name." };
-
-  const material = readEnrollmentKey(formData);
-  if (!material.ok) return material;
+  const presented = String(formData.get("bootstrapToken") ?? "");
+  if (!presented) return { ok: false, error: "Enter the bootstrap token." };
 
   const meta = await requestMeta();
-  const presented = String(formData.get("bootstrapToken") ?? "");
+  if (!(await attemptAllowed(meta.ip))) return { ok: false, error: "Too many setup attempts. Wait and try again." };
 
-  const result = await db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(814726391)`);
+  type Outcome =
+    | { kind: "done"; organisationId: string; vaultKeyId: string; crk: Buffer }
+    | { kind: "error"; error: string };
+
+  const result: Outcome = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${BOOTSTRAP_LOCK})`);
+    const [consumed] = await tx
+      .select({ id: platformBootstrap.id })
+      .from(platformBootstrap)
+      .where(and(eq(platformBootstrap.id, "platform"), isNotNull(platformBootstrap.consumedAt)));
     const [owner] = await tx
       .select({ id: memberships.id })
       .from(memberships)
       .where(eq(memberships.role, "owner"))
       .limit(1);
-    if (owner) return { existing: true as const };
+    if (consumed || owner) return { kind: "error", error: "Recruvault has already been set up. Sign in instead." };
 
+    // An organisation without an owner means an interrupted earlier install;
+    // only the separate operator recovery token may adopt it.
     const [organisation] = await tx.select({ id: organisations.id }).from(organisations).limit(1);
-    const recovery = Boolean(organisation);
-    const tokenError = await capabilityOk(
-      presented,
-      recovery ? process.env.BOOTSTRAP_RECOVERY_TOKEN : process.env.BOOTSTRAP_TOKEN,
-      meta.ip ?? "unknown",
-    );
-    if (tokenError) return { existing: false as const, error: tokenError };
+    const expected = organisation ? process.env.BOOTSTRAP_RECOVERY_TOKEN : process.env.BOOTSTRAP_TOKEN;
+    if (!capabilityOk(presented, expected)) return { kind: "error", error: "The bootstrap token is not valid." };
+    if (!organisation && !organisationName) return { kind: "error", error: "Enter your organisation name." };
 
-    if (firstName || lastName) {
-      await tx
-        .update(user)
-        .set({
-          name: `${firstName || session.user.name} ${lastName}`.trim(),
-          accountType: "org",
-          updatedAt: new Date(),
-        })
-        .where(sql`${user.id} = ${session.user.id}`);
+    const [membership] = await tx
+      .select({ id: memberships.id })
+      .from(memberships)
+      .where(eq(memberships.userId, session.user.id));
+    const [candidate] = await tx
+      .select({ id: candidateAccounts.id })
+      .from(candidateAccounts)
+      .where(eq(candidateAccounts.userId, session.user.id));
+    if (membership || candidate) {
+      return { kind: "error", error: "Use a new account for the first owner." };
     }
 
     const organisationId = organisation
@@ -88,19 +105,42 @@ export async function completePlatformSetup(formData: FormData): Promise<ActionR
             .returning({ id: organisations.id })
         )[0].id;
 
-    await tx.insert(memberships).values({
-      orgId: organisationId,
-      userId: session.user.id,
-      role: "owner",
-    });
-    const vault = await insertVaultKey(tx, {
-      ownerType: "organisation",
-      ownerId: organisationId,
-      crk: material.material.crk,
-      kdf: material.material.kdf,
-      kdfSalt: material.material.kdfSalt,
-      kdfParams: material.material.kdfParams,
-    });
+    // An adopted organisation may already have a vault: the claimant must
+    // prove they hold that key rather than enrolling over it.
+    const existingVault = organisation ? await activeVault("organisation", organisationId) : null;
+    let vaultKeyId: string;
+    let crk: Buffer;
+    if (existingVault) {
+      const key = readUnlockKey(formData, existingVault);
+      if (!key.ok || !verifierMatches(key.crk, "organisation", organisationId, existingVault.verifier)) {
+        return { kind: "error", error: "Enter the organisation's existing encryption key." };
+      }
+      vaultKeyId = existingVault.id;
+      crk = key.crk;
+    } else {
+      const material = readEnrollmentKey(formData);
+      if (!material.ok) return { kind: "error", error: material.error };
+      const vault = await insertVaultKey(tx, {
+        ownerType: "organisation",
+        ownerId: organisationId,
+        crk: material.material.crk,
+        kdf: material.material.kdf,
+        kdfSalt: material.material.kdfSalt,
+        kdfParams: material.material.kdfParams,
+      });
+      vaultKeyId = vault.id;
+      crk = material.material.crk;
+    }
+
+    await tx
+      .update(user)
+      .set({
+        ...(firstName || lastName ? { name: `${firstName || session.user.name} ${lastName}`.trim() } : {}),
+        accountType: "org",
+        updatedAt: new Date(),
+      })
+      .where(eq(user.id, session.user.id));
+    await tx.insert(memberships).values({ orgId: organisationId, userId: session.user.id, role: "owner" });
     await tx
       .insert(platformBootstrap)
       .values({
@@ -113,17 +153,24 @@ export async function completePlatformSetup(formData: FormData): Promise<ActionR
         target: platformBootstrap.id,
         set: { consumedAt: new Date(), consumedByUserId: session.user.id },
       });
-    return { existing: false as const, organisationId, vaultKeyId: vault.id };
+    return { kind: "done", organisationId, vaultKeyId, crk };
   });
 
-  if (result.existing) return { ok: false, error: "Recruvault has already been set up. Sign in instead." };
-  if (!("vaultKeyId" in result) || !result.vaultKeyId || !result.organisationId) {
-    return { ok: false, error: "error" in result && result.error ? result.error : "Setup could not be completed." };
+  if (result.kind === "error") {
+    await audit({
+      actorType: "system",
+      actorId: session.user.id,
+      action: "platform.setup_rejected",
+      targetType: "platform",
+      targetId: "platform",
+      ...meta,
+    });
+    return { ok: false, error: result.error };
   }
 
   await establishVaultUnlock({
     vaultKeyId: result.vaultKeyId,
-    crk: material.material.crk,
+    crk: result.crk,
     sessionId: session.session.id,
     expiresAt: session.session.expiresAt,
   });
