@@ -41,7 +41,7 @@
     "react-dom": "19.3.1",
     "resend": "^6.17.1",
     "tailwind-merge": "^3.6.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
@@ -62,6 +62,9 @@
     "vitest": "^4.1.11"
   },
   "overrides": {
+    "inngest": {
+      "zod": "^4.6.7"
+    },
     "inngest-cli": {
       "adm-zip": "^0.6.1"
     },
