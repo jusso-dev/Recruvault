@@ -23,7 +23,7 @@
     "outbox": "tsx scripts/outbox.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1080.0",
+    "@aws-sdk/client-s3": "^3.1152.0",
     "@aws-sdk/client-sns": "^3.1080.0",
     "@better-auth/passkey": "^1.7.7",
     "@sentry/nextjs": "^10.64.0",
