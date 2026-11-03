@@ -7,6 +7,7 @@ import { PDFDocument } from "pdf-lib";
 import * as rows from "./security-db";
 import { waitForEmail } from "./email-helpers";
 import {
+  PASSWORD,
   callAction,
   clientWithCookie,
   cookieHeaderOf,
@@ -53,7 +54,16 @@ const WEBHOOK_SECRET = "whsec_" + Buffer.from("e2e-webhook-secret-not-for-produc
 
 // BetterAuth stores addresses lower-cased.
 const email = (label: string) => `sm-${label}-${RUN}@e2e.recruvault.test`.toLowerCase();
-const ORG_SCOPES = ["reports:read", "roles:read", "roles:write", "jd:write", "invitations:send", "submissions:read", "match:read"] as const;
+const ORG_SCOPES = [
+  "reports:read",
+  "roles:read",
+  "roles:write",
+  "jd:write",
+  "invitations:send",
+  "submissions:read",
+  "submissions:write",
+  "match:read",
+] as const;
 const SEEKER_SCOPES = ["profile:read", "profile:write", "documents:read", "applications:read"] as const;
 
 type Label =
@@ -75,7 +85,12 @@ type Label =
   | "seekerA"
   | "seekerALocked"
   | "seekerB"
-  | "seekerUnenrolled";
+  | "seekerUnenrolled"
+  | "inviteeUnverified"
+  | "revokedInvitee"
+  | "passwordInvitee"
+  | "removedSenderInvitee"
+  | "tempAdminA";
 
 const P = new Map<Label, APIRequestContext>();
 const who = (label: Label) => {
@@ -102,7 +117,16 @@ const w = {
   tokenExpired: "",
   tokenLockout: "",
   atForwardId: "",
+  reqRecruiter: "",
   memReviewerA: "",
+  inviteTokens: new Map<string, string>(),
+  invitePendingId: "",
+  invitePendingToken: "",
+  inviteSeekerToken: "",
+  inviteRevokedToken: "",
+  invitePasswordToken: "",
+  inviteRemovedSenderToken: "",
+  recruiterKey: "",
   reviewerAId: "",
   recruiterAId: "",
   ownerBId: "",
@@ -125,6 +149,10 @@ function protectedValues() {
     ...w.orgKeys.values(),
     ...w.seekerKeys.values(),
     w.orgBKey,
+    w.recruiterKey,
+    ...w.inviteTokens.values(),
+    w.invitePendingToken,
+    w.inviteSeekerToken,
   ].filter(Boolean);
 }
 
@@ -203,6 +231,38 @@ async function seekerAccount(label: string, key?: string) {
   return principal.client;
 }
 
+/** Send a teammate invitation and return the emailed link token. */
+async function inviteToken(recipient: string, role: string, sender: Label = "ownerA") {
+  await rows.resetRateLimits();
+  const after = Date.now();
+  const sent = await runOk(sender, "inviteMember", { form: { email: recipient, role } });
+  const mail = await waitForEmail({ to: recipient, subject: /^Join .* on Recruvault$/, after });
+  expect(mail.ctaUrl).toContain("/invite/");
+  return { id: sent.result!.id!, token: new URL(mail.ctaUrl!).pathname.split("/")[2] };
+}
+
+/** A teammate joins the way the UI does: sign up from the link, verify, accept, unlock. */
+async function joinByInvitation(label: Label, role: string) {
+  const { token } = await inviteToken(email(label), role);
+  await rows.resetRateLimits();
+  const after = Date.now();
+  const principal = await signUp(label, email(label), "seeker");
+  await verifyByEmail(principal, after);
+  P.set(label, principal.client);
+  await runOk(label, "acceptInvitation", { form: { token, password: PASSWORD } }, { token });
+  await runOk(label, "unlockVault", { form: { encryptionKey: KEYS.orgA } });
+  w.inviteTokens.set(label, token);
+}
+
+/** A verified account at `address` that has not accepted anything yet. */
+async function verifiedInvitee(label: Label, address: string) {
+  await rows.resetRateLimits();
+  const after = Date.now();
+  const principal = await signUp(label, address, "seeker");
+  await verifyByEmail(principal, after);
+  P.set(label, principal.client);
+}
+
 async function secondSession(label: string, account: string) {
   await rows.resetRateLimits();
   return (await signIn(label, email(account))).client;
@@ -235,6 +295,7 @@ async function warmPages() {
     "/r/warm",
     "/r/warm/respond",
     "/r/warm/done",
+    "/invite/warm",
   ];
   for (const page of pages) await client.get(page, { maxRedirects: 0 });
   await client.dispose();
@@ -315,6 +376,28 @@ function routes(): Route[] {
       call: (c, h) => c.post(`/api/v1/requests/${w.reqA}/send`, { headers: h, data: { email: email("api-invitee") } }),
     },
     { name: "GET /api/v1/requests/:id/submissions", kind: "org", scope: "submissions:read", call: (c, h) => c.get(`/api/v1/requests/${w.reqA}/submissions`, { headers: h }) },
+    {
+      // Same status as before, so the allowed calls leave the role open.
+      name: "PATCH /api/v1/requests/:id",
+      kind: "org",
+      scope: "roles:write",
+      mutates: true,
+      call: (c, h) => c.patch(`/api/v1/requests/${w.reqA}`, { headers: h, data: { status: "open" } }),
+    },
+    {
+      name: "POST /api/v1/requests/:id/nda",
+      kind: "org",
+      scope: "jd:write",
+      mutates: true,
+      call: (c, h) => c.post(`/api/v1/requests/${w.reqA}/nda`, { headers: h, multipart: { nda: pdf(MARK.jd, "nda.pdf") } }),
+    },
+    {
+      name: "PATCH /api/v1/submissions/:id",
+      kind: "org",
+      scope: "submissions:write",
+      mutates: true,
+      call: (c, h) => c.patch(`/api/v1/submissions/${w.subA}`, { headers: h, data: { status: "under_review" } }),
+    },
     { name: "GET /api/v1/reports/recruiter", kind: "org", scope: "reports:read", call: (c, h) => c.get("/api/v1/reports/recruiter", { headers: h }) },
     { name: "POST /api/v1/match", kind: "org", scope: "match:read", call: (c, h) => c.post("/api/v1/match", { headers: h, data: { skills: ["matrix"] } }) },
     { name: "GET /api/v1/me/profile", kind: "seeker", scope: "profile:read", call: (c, h) => c.get("/api/v1/me/profile", { headers: h }) },
@@ -355,15 +438,32 @@ test.describe("security matrix", () => {
     P.set("anonymous", await newClient());
     P.set("forgedCookie", await clientWithCookie("better-auth.session_token=forged.c2lnbmF0dXJl"));
 
-    // Organisation A: owner plus one member per assignable role.
+    // Organisation A: owner plus one member per assignable role, each
+    // joining through the emailed invitation link.
     P.set("ownerA", await orgAccount("ownera"));
     const createdA = await runOk("ownerA", "createOrganisation", { form: { name: `Matrix Org A ${RUN}`, ...keyForm(KEYS.orgA) } });
     w.orgA = createdA.result!.id!;
     for (const [label, role] of [["adminA", "admin"], ["recruiterA", "recruiter"], ["reviewerA", "reviewer"], ["complianceA", "compliance"]] as const) {
-      P.set(label, await orgAccount(label.toLowerCase()));
-      await runOk("ownerA", "addMember", { form: { email: email(label.toLowerCase()), role } });
-      await runOk(label, "unlockVault", { form: { encryptionKey: KEYS.orgA } });
+      await joinByInvitation(label, role);
     }
+    // Invitations that stay open, or are withdrawn, for the acceptance cells.
+    const pending = await inviteToken(email("pending"), "reviewer");
+    w.invitePendingId = pending.id;
+    w.invitePendingToken = pending.token;
+    await rows.resetRateLimits();
+    P.set("inviteeUnverified", (await signUp("inviteeUnverified", email("pending"), "seeker")).client);
+    const withdrawn = await inviteToken(email("revokedinvite"), "reviewer");
+    w.inviteRevokedToken = withdrawn.token;
+    await runOk("ownerA", "revokeInvitation", { form: { invitationId: withdrawn.id } });
+    await verifiedInvitee("revokedInvitee", email("revokedinvite"));
+    // An open invitation whose verified invitee must still present the account password.
+    w.invitePasswordToken = (await inviteToken(email("pwinvitee"), "reviewer")).token;
+    await verifiedInvitee("passwordInvitee", email("pwinvitee"));
+    // An invitation from an admin who is then removed carries no authority.
+    await joinByInvitation("tempAdminA", "admin");
+    w.inviteRemovedSenderToken = (await inviteToken(email("removedsenderinvitee"), "reviewer", "tempAdminA")).token;
+    await verifiedInvitee("removedSenderInvitee", email("removedsenderinvitee"));
+    await runOk("ownerA", "removeMember", { form: { membershipId: await rows.membershipId(email("tempAdminA")) } });
     w.memReviewerA = await rows.membershipId(email("reviewera"));
     w.reviewerAId = await rows.userId(email("reviewera"));
     w.recruiterAId = await rows.userId(email("recruitera"));
@@ -385,6 +485,8 @@ test.describe("security matrix", () => {
 
     // Seekers: two enrolled strangers and one that never saved a key.
     P.set("seekerA", await seekerAccount("seekerA", KEYS.seekerA));
+    // seekerA holds career data, so an invitation to that address must not convert the account.
+    w.inviteSeekerToken = (await inviteToken(email("seekerA"), "recruiter")).token;
     P.set("seekerB", await seekerAccount("seekerB", KEYS.seekerB));
     P.set("seekerUnenrolled", await seekerAccount("seekerUnenrolled"));
 
@@ -414,6 +516,8 @@ test.describe("security matrix", () => {
     w.templateA = (await rows.templateId(w.orgA))!;
     const roleB = await runOk("ownerB", "createRequest", { form: { title: `Matrix role B ${RUN}`, fields: ["resume"] } });
     w.reqB = roleB.result!.id!;
+    const roleRecruiter = await runOk("recruiterA", "createRequest", { form: { title: `Matrix recruiter role ${RUN}`, fields: ["resume"] } });
+    w.reqRecruiter = roleRecruiter.result!.id!;
 
     // Secure links: seekerA applies; the others feed the link-state tests.
     w.tokenA = await invitation("ownerA", w.reqA, email("seekerA"));
@@ -434,6 +538,7 @@ test.describe("security matrix", () => {
     w.subA = (await rows.submissionForToken((await rows.accessToken(w.tokenA)).id)).id;
     w.docA = await rows.submissionDocumentId(w.subA);
     await rows.waitForCleanScan("documents", w.docA);
+    await runOk("ownerA", "shareSubmission", { form: { submissionId: w.subA, userId: w.reviewerAId } });
 
     // Career documents and a credential, one per seeker.
     await runOk("seekerA", "uploadWalletDocument", { form: { kind: "resume", file: pdf(MARK.walletA, "a.pdf") } });
@@ -462,13 +567,17 @@ test.describe("security matrix", () => {
       w.seekerKeys.set(scope, created.result!.key as string);
       w.seekerKeyIds.set(scope, created.result!.id!);
     }
+    w.recruiterKey = (await runOk("recruiterA", "createApiKey", {
+      form: { name: `matrix-recruiter-${RUN}`, scopes: [...ORG_SCOPES], ttlDays: "30" },
+    })).result!.key as string;
     w.orgBKey = (await runOk("ownerB", "createApiKey", { form: { name: `matrix-b-${RUN}`, scopes: [...ORG_SCOPES], ttlDays: "30" } })).result!.key as string;
-    for (const name of ["expired", "revoked"]) {
+    // Retired one at a time: each user may hold at most ten active keys.
+    for (const name of ["revoked", "expired"]) {
       const created = await runOk("ownerA", "createApiKey", { form: { name: `matrix-${name}-${RUN}`, scopes: ["roles:read"], ttlDays: "30" } });
       w.orgKeys.set(name, created.result!.key as string);
+      if (name === "revoked") await runOk("ownerA", "revokeApiKey", { form: { keyId: created.result!.id! } });
+      else await rows.expireApiKey(`matrix-expired-${RUN}`);
     }
-    await rows.expireApiKey(`matrix-expired-${RUN}`);
-    await runOk("ownerA", "revokeApiKey", { form: { keyId: await rows.apiKeyId(`matrix-revoked-${RUN}`) } });
   });
 
   test("the matrix names every Server Action in the source and the build", async () => {
@@ -481,6 +590,8 @@ test.describe("security matrix", () => {
   });
 
   test("every Server Action refuses every principal without the right", async () => {
+    // OTP, invitation, and unlock attempts have per-IP budgets; every principal shares 127.0.0.1.
+    await rows.resetRateLimits();
     const failures: string[] = [];
     for (const cell of actionCells()) {
       const before = cell.state ? await cell.state() : undefined;
@@ -506,6 +617,36 @@ test.describe("security matrix", () => {
       }
     }
     expect(failures).toEqual([]);
+  });
+
+  test("accepting an invitation needs the account password, and ends the account's other sessions", async () => {
+    await rows.resetRateLimits();
+    const token = w.invitePasswordToken;
+    const accept = (password?: string) =>
+      run("passwordInvitee", "acceptInvitation", { form: password === undefined ? { token } : { token, password } }, { token });
+    for (const [label, outcome] of [
+      ["no password", await accept()],
+      ["wrong password", await accept("not-the-password")],
+    ] as const) {
+      expect(outcome.result?.ok, label).toBe(false);
+      expect(outcome.result?.error ?? "", label).toMatch(/password/);
+    }
+    expect(await rows.orgIdForEmail(email("pwinvitee"))).toBeNull();
+    // The removed admin's invitee has the right password, link, and address.
+    const removed = await run("removedSenderInvitee", "acceptInvitation", {
+      form: { token: w.inviteRemovedSenderToken, password: PASSWORD },
+    }, { token: w.inviteRemovedSenderToken });
+    expect(removed.result?.ok).toBe(false);
+    expect(await rows.orgIdForEmail(email("removedsenderinvitee"))).toBeNull();
+
+    // With the password the invitee joins, and an older session of theirs ends.
+    const other = await secondSession("passwordInviteeOther", "pwinvitee");
+    expect((await other.get("/api/auth/get-session")).ok()).toBe(true);
+    expect(denied(await accept(PASSWORD))).toBe(false);
+    expect(await rows.orgIdForEmail(email("pwinvitee"))).toBe(w.orgA);
+    const after = await other.get("/api/auth/get-session");
+    expect(await after.text()).toMatch(/^null$|"session":null/);
+    await other.dispose();
   });
 
   test("REST v1: each scoped key reaches only its own route", async () => {
@@ -593,7 +734,25 @@ test.describe("security matrix", () => {
     await expectDeniedResponse(await anon.get("/api/v1/me/key", { headers: bearer(w.orgKeys.get("revoked")!) }), [401], "describe revoked key");
   });
 
-  test("REST v1: organisation B's key cannot read, upload to, or send from organisation A", async () => {
+  /** Every v1 call a key could make against organisation A's role and application. */
+  async function attemptsOnRoleA(headers: Record<string, string>) {
+    const anon = who("anonymous");
+    return [
+      ["read role", "read", await anon.get(`/api/v1/requests/${w.reqA}`, { headers })],
+      ["change role status", "write", await anon.patch(`/api/v1/requests/${w.reqA}`, { headers, data: { status: "archived" } })],
+      ["list submissions", "submissions", await anon.get(`/api/v1/requests/${w.reqA}/submissions`, { headers })],
+      ["move an application", "submissions", await anon.patch(`/api/v1/submissions/${w.subA}`, { headers, data: { status: "declined" } })],
+      ["upload JD", "write", await anon.post(`/api/v1/requests/${w.reqA}/jd`, { headers, multipart: { jd: pdf("intruder", "x.pdf") } })],
+      ["upload NDA", "write", await anon.post(`/api/v1/requests/${w.reqA}/nda`, { headers, multipart: { nda: pdf("intruder", "x.pdf") } })],
+      ["send invitation", "write", await anon.post(`/api/v1/requests/${w.reqA}/send`, { headers, data: { email: email("cross-invite") } })],
+    ] as const;
+  }
+
+  async function roleAState() {
+    return { request: await rows.requestRow(w.reqA), deliveries: await rows.deliveryCount(w.reqA), submission: await rows.submissionRow(w.subA) };
+  }
+
+  test("REST v1: organisation B's key cannot read, change, upload to, or send from organisation A", async () => {
     const anon = who("anonymous");
     const b = bearer(w.orgBKey);
     const listed = await anon.get("/api/v1/requests", { headers: b });
@@ -601,24 +760,39 @@ test.describe("security matrix", () => {
     const ids = ((await listed.json()) as { requests: { id: string }[] }).requests.map((r) => r.id);
     expect(ids).toContain(w.reqB);
     expect(ids).not.toContain(w.reqA);
-    const before = await rows.deliveryCount(w.reqA);
-    const jdBefore = (await rows.requestRow(w.reqA)).jd_document_id;
-    const attempts: [string, Promise<APIResponse>][] = [
-      ["read role", anon.get(`/api/v1/requests/${w.reqA}`, { headers: b })],
-      ["list submissions", anon.get(`/api/v1/requests/${w.reqA}/submissions`, { headers: b })],
-      ["upload JD", anon.post(`/api/v1/requests/${w.reqA}/jd`, { headers: b, multipart: { jd: pdf("cross-tenant", "x.pdf") } })],
-      ["send invitation", anon.post(`/api/v1/requests/${w.reqA}/send`, { headers: b, data: { email: email("cross-invite") } })],
-    ];
-    for (const [label, pending] of attempts) {
-      await expectDeniedResponse(await pending, [404], `org B ${label}`);
+    const before = await roleAState();
+    for (const [label, , response] of await attemptsOnRoleA(b)) {
+      await expectDeniedResponse(response, [404], `org B ${label}`);
     }
-    expect(await rows.deliveryCount(w.reqA)).toBe(before);
-    expect((await rows.requestRow(w.reqA)).jd_document_id).toBe(jdBefore);
+    expect(await roleAState()).toEqual(before);
     const report = await anon.get("/api/v1/reports/recruiter", { headers: b });
     expect(await report.text()).not.toContain(w.reqA);
     // Seeker keys are tenant-free but still owner-bound.
     const applications = await anon.get("/api/v1/me/applications", { headers: bearer(w.seekerKeys.get("all")!) });
     expect(((await applications.json()) as { applications: unknown[] }).applications).toHaveLength(1);
+  });
+
+  test("REST v1: a recruiter's key and session manage only roles that recruiter created", async () => {
+    const anon = who("anonymous");
+    const key = bearer(w.recruiterKey);
+    // Allowed on the recruiter's own role, so the denials below are not vacuous.
+    expect((await anon.get(`/api/v1/requests/${w.reqRecruiter}`, { headers: key })).status()).toBe(200);
+    expect((await anon.patch(`/api/v1/requests/${w.reqRecruiter}`, { headers: key, data: { status: "open" } })).status()).toBe(200);
+    expect((await anon.get(`/api/v1/requests/${w.reqRecruiter}/submissions`, { headers: key })).status()).toBe(200);
+    const listed = await anon.get("/api/v1/requests", { headers: key });
+    const ids = ((await listed.json()) as { requests: { id: string }[] }).requests.map((r) => r.id);
+    expect(ids).toContain(w.reqRecruiter);
+    expect(ids).not.toContain(w.reqA);
+
+    const before = await roleAState();
+    for (const [label, kind, response] of await attemptsOnRoleA(key)) {
+      // Unknown to the recruiter (404), or visible to the org but not theirs (403).
+      await expectDeniedResponse(response, kind === "submissions" ? [403, 404] : [404], `recruiter ${label}`);
+    }
+    for (const path of [`/api/v1/requests/${w.reqA}`, `/api/v1/requests/${w.reqA}/submissions`]) {
+      await expectDeniedResponse(await who("recruiterA").get(path), [403, 404], `recruiter session ${path}`);
+    }
+    expect(await roleAState()).toEqual(before);
   });
 
   test("submission documents and exports follow tenant, role, share, and vault state", async () => {
@@ -635,11 +809,13 @@ test.describe("security matrix", () => {
     for (const label of ["anonymous", "forgedCookie", "ownerAExpired", "ownerARevoked", "ownerB", "seekerB", "orglessOrg", "unverifiedOrg"] as const) {
       await expectDeniedResponse(await view(label, w.docA), [403], `document as ${label}`);
     }
-    // Reviewers see a document only once its submission is shared with them, and never download it.
-    await expectDeniedResponse(await view("reviewerA", w.docA), [403], "reviewer before share");
-    await runOk("ownerA", "shareSubmission", { form: { submissionId: w.subA, userId: w.reviewerAId } });
-    expect((await view("reviewerA", w.docA)).status()).toBe(200);
+    // Reviewers see a document only while its submission is shared with them, and never download it.
+    expect((await view("reviewerA", w.docA)).status(), "reviewer while shared").toBe(200);
     await expectDeniedResponse(await view("reviewerA", w.docA, true), [403], "reviewer download");
+    await runOk("ownerA", "unshareSubmission", { form: { submissionId: w.subA, userId: w.reviewerAId } });
+    await expectDeniedResponse(await view("reviewerA", w.docA), [403], "reviewer after unshare");
+    await runOk("ownerA", "shareSubmission", { form: { submissionId: w.subA, userId: w.reviewerAId } });
+    expect((await view("reviewerA", w.docA)).status(), "reviewer after re-share").toBe(200);
 
     // Unknown and cross-tenant ids look the same as missing.
     await expectDeniedResponse(await view("ownerA", randomUUID()), [404], "unknown document");
@@ -720,7 +896,7 @@ test.describe("security matrix", () => {
     const otherDraft = await callAction(recipient, act("loadDraftValues"), { args: [(await rows.accessToken(w.tokenLockout)).id] }, {
       token: w.tokenForward,
     });
-    expect(otherDraft.result).toEqual({});
+    expect(otherDraft.result).toEqual({ values: {}, restoreFailed: false });
 
     // Exhausted attempts lock the code even when the right one arrives.
     const lockoutClient = await newClient();
@@ -820,8 +996,26 @@ test.describe("security matrix", () => {
     expect((await post(signed("msg_ok", now))).status()).toBe(200);
   });
 
+  test("only the applicant can withdraw their application", async () => {
+    // Denials for every other principal are in the Server Action matrix.
+    await runOk("seekerA", "withdrawApplication", { form: { submissionId: w.subA } });
+    expect((await rows.submissionRow(w.subA)).status).toBe("withdrawn");
+  });
+
   test("no plaintext, customer key, API key, or link token reaches object storage or the database", async () => {
-    const secrets = [...Object.values(MARK), ...Object.values(KEYS), ...w.orgKeys.values(), ...w.seekerKeys.values(), w.orgBKey, ...w.linkTokens];
+    const secrets = [
+      ...Object.values(MARK),
+      ...Object.values(KEYS),
+      ...w.orgKeys.values(),
+      ...w.seekerKeys.values(),
+      w.orgBKey,
+      w.recruiterKey,
+      ...w.linkTokens,
+      ...w.inviteTokens.values(),
+      w.invitePendingToken,
+      w.inviteSeekerToken,
+      w.inviteRevokedToken,
+    ];
     const s3 = new S3Client({
       region: process.env.AWS_REGION ?? "us-east-1",
       endpoint: process.env.S3_ENDPOINT,
@@ -917,10 +1111,63 @@ function actionCells(): ActionCell[] {
       state: () => rows.organisationCount(),
     },
     {
-      action: "addMember",
-      deny: [...ORG_OUTSIDERS, "ownerALocked", "recruiterA", "reviewerA", "complianceA", "ownerB"],
-      input: (label) => ({ form: { email: label === "ownerB" ? email("reviewera") : email("orgless"), role: "admin" } }),
-      state: async () => [await rows.orgIdForEmail(email("orgless")), await rows.orgIdForEmail(email("reviewera"))],
+      action: "inviteMember",
+      deny: [...ORG_OUTSIDERS, "ownerALocked", "recruiterA", "reviewerA", "complianceA"],
+      input: form({ email: email("intruder-invitee"), role: "admin" }),
+      state: () => rows.invitationCount(w.orgA, email("intruder-invitee")),
+    },
+    {
+      action: "revokeInvitation",
+      deny: [...ORG_OUTSIDERS, "recruiterA", "reviewerA", "complianceA", "ownerB"],
+      input: () => ({ form: { invitationId: w.invitePendingId } }),
+      state: () => rows.invitationRevoked(w.invitePendingId),
+    },
+    {
+      action: "acceptInvitation",
+      // Each principal presents the token that tests its case: the wrong
+      // address, an unverified match, a career record, a used or withdrawn link.
+      deny: [
+        "anonymous",
+        "forgedCookie",
+        "inviteeUnverified",
+        "seekerA",
+        "seekerB",
+        "ownerB",
+        "orglessOrg",
+        "adminA",
+        "revokedInvitee",
+        "passwordInvitee",
+        "removedSenderInvitee",
+      ],
+      input: (label) => {
+        const tokens: Partial<Record<Label, string>> = {
+          seekerA: w.inviteSeekerToken,
+          orglessOrg: w.inviteTokens.get("adminA"),
+          adminA: w.inviteTokens.get("adminA"),
+          revokedInvitee: w.inviteRevokedToken,
+          passwordInvitee: w.invitePasswordToken,
+          removedSenderInvitee: w.inviteRemovedSenderToken,
+        };
+        // Everyone presents their real password except passwordInvitee, who
+        // has the right link and address but the wrong password.
+        const password = label === "passwordInvitee" ? "not-the-password" : PASSWORD;
+        return { form: { token: tokens[label] ?? w.invitePendingToken, password } };
+      },
+      params: () => ({ token: "x" }),
+      state: async () => [
+        await rows.memberCount(w.orgA),
+        await rows.memberCount(w.orgB),
+        await rows.accountTypes([
+          email("seekerA"),
+          email("seekerB"),
+          email("pending"),
+          email("revokedinvite"),
+          email("orgless"),
+          email("pwinvitee"),
+          email("removedsenderinvitee"),
+        ]),
+      ],
+      reason: /Sign in|different email|Verify your email|career record|already been used|withdrawn|already belongs|not valid|password/,
     },
     {
       action: "updateMemberRole",
@@ -988,6 +1235,12 @@ function actionCells(): ActionCell[] {
       deny: [...ORG_OUTSIDERS, "ownerALocked", "reviewerA", "recruiterA", "ownerB"],
       input: () => ({ form: { submissionId: w.subA, status: "shortlisted" } }),
       state: async () => (await rows.submissionRow(w.subA)).status,
+    },
+    {
+      action: "unshareSubmission",
+      deny: [...ORG_OUTSIDERS, "recruiterA", "reviewerA", "complianceA", "ownerB"],
+      input: () => ({ form: { submissionId: w.subA, userId: w.reviewerAId } }),
+      state: () => rows.shareCount(w.subA),
     },
     {
       action: "deleteSubmission",
@@ -1090,6 +1343,12 @@ function actionCells(): ActionCell[] {
       state: () => rows.query(`select count(*)::int as n from saved_roles`),
     },
     {
+      action: "withdrawApplication",
+      deny: [...SEEKER_OUTSIDERS, "seekerB", "seekerUnenrolled"],
+      input: () => ({ form: { submissionId: w.subA } }),
+      state: async () => (await rows.submissionRow(w.subA)).status,
+    },
+    {
       action: "requestErasure",
       deny: SEEKER_OUTSIDERS,
       input: form({ confirm: "DELETE" }),
@@ -1180,7 +1439,7 @@ function actionCells(): ActionCell[] {
       deny: ["anonymous", "forgedCookie", "ownerA", "seekerB"],
       input: () => ({ args: [w.atForwardId] }),
       params: () => ({ token: "x" }),
-      refused: (outcome) => JSON.stringify(outcome.result ?? {}) === "{}",
+      refused: (outcome) => isProxyRedirect(outcome) || JSON.stringify(outcome.result?.values ?? null) === "{}",
     },
   ];
 }
