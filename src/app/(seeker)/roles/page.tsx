@@ -12,8 +12,8 @@ import {
   submissions,
 } from "@/db/schema";
 import { requireCandidate } from "@/lib/guards";
-import { applicationStatusLabel } from "@/lib/application-status";
-import { toggleSavedRole } from "@/actions/wallet";
+import { applicationStatusLabel, canWithdrawApplication } from "@/lib/application-status";
+import { toggleSavedRole, withdrawApplication } from "@/actions/wallet";
 import { updateJobAlertSubscription } from "@/actions/job-alerts";
 import { ActionForm } from "@/components/action-form";
 import {
@@ -86,7 +86,7 @@ export default async function RolesPage({
   const savedIds = new Set(saved.map((s) => s.requestId));
 
   const responded = await db
-    .select({ requestId: submissions.requestId, status: submissions.status })
+    .select({ id: submissions.id, requestId: submissions.requestId, status: submissions.status })
     .from(submissions)
     .where(eq(submissions.candidateAccountId, ctx.candidateAccountId));
   const respondedIds = new Set(responded.map((r) => r.requestId));
@@ -236,6 +236,22 @@ export default async function RolesPage({
           <Badge variant={statusBadgeVariant(myResponse?.status ?? request.status)}>
             {myResponse ? applicationStatusLabel(myResponse.status) : request.status.replace("_", " ")}
           </Badge>
+          {myResponse && canWithdrawApplication(myResponse.status) && (
+            <ActionForm
+              action={withdrawApplication}
+              successMessage="Application withdrawn."
+              confirm={{
+                title: `Withdraw from ${request.title}?`,
+                body: `${orgName} will see your application as withdrawn and stop progressing it. You cannot undo this; to be considered again, contact the recruiter.`,
+                confirmLabel: "Withdraw application",
+              }}
+            >
+              <input type="hidden" name="submissionId" value={myResponse.id} />
+              <Button type="submit" variant="ghost" size="sm">
+                Withdraw
+              </Button>
+            </ActionForm>
+          )}
           <ActionForm
             action={toggleSavedRole}
             successMessage={isSaved ? "Role removed from saved roles." : "Role saved."}

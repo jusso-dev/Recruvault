@@ -275,13 +275,7 @@ test("creates recruiter, reviewer, and job-seeker accounts through the UI", asyn
     await capture(page, "05-recruiter-dashboard-empty.png");
   });
 
-  await test.step("create reviewer and job-seeker accounts", async () => {
-    const reviewerContext = await browser.newContext({ baseURL: BASE_URL });
-    const reviewerPage = await reviewerContext.newPage();
-    await signUp(reviewerPage, accounts.reviewer, "org");
-    await reviewerContext.storageState({ path: REVIEWER_STATE });
-    await reviewerContext.close();
-
+  await test.step("create the job-seeker account", async () => {
     const seekerContext = await browser.newContext({ baseURL: BASE_URL });
     const seekerPage = await seekerContext.newPage();
     await signUp(seekerPage, accounts.seeker, "seeker");
@@ -291,13 +285,58 @@ test("creates recruiter, reviewer, and job-seeker accounts through the UI", asyn
     await seekerContext.close();
   });
 
-  await test.step("add the reviewer through organisation settings", async () => {
+  await test.step("invite the reviewer through organisation settings", async () => {
     await page.goto("/dashboard/settings");
-    await page.getByLabel("Add member by email").fill(accounts.reviewer.email);
+    await page.getByLabel("Invite by email").fill(accounts.reviewer.email);
     await page.getByLabel("Role", { exact: true }).selectOption("reviewer");
-    await page.getByRole("button", { name: "Add", exact: true }).click();
-    await expect(toast(page)).toContainText("Member added");
+    const invitedAfter = Date.now();
+    await page.getByRole("button", { name: "Send invitation" }).click();
+    await expect(toast(page)).toContainText("Invitation sent");
+    const invitation = await waitForEmail({
+      to: accounts.reviewer.email,
+      subject: `Join ${organisationName} on Recruvault`,
+      after: invitedAfter,
+    });
+    expect(invitation.ctaUrl).toContain("/invite/");
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: `Revoke invitation for ${accounts.reviewer.email}` }),
+    ).toBeVisible();
     await capture(page, "07-organisation-settings.png");
+
+    // A signed-out invitee creates an account from the link and returns to it.
+    const reviewerContext = await browser.newContext({ baseURL: BASE_URL });
+    const reviewerPage = await reviewerContext.newPage();
+    await reviewerPage.goto(invitation.ctaUrl!);
+    await expect(reviewerPage.getByRole("heading", { name: `Join ${organisationName}` })).toBeVisible();
+    await reviewerPage.getByRole("link", { name: "Create an account" }).click();
+    await reviewerPage.getByLabel("Full name").fill(accounts.reviewer.name);
+    await reviewerPage.getByLabel("Email").fill(accounts.reviewer.email);
+    await reviewerPage.getByLabel("Password").fill(accounts.reviewer.password);
+    const signedUpAfter = Date.now();
+    await reviewerPage.getByRole("button", { name: "Create account" }).click();
+    await expect(reviewerPage.getByRole("heading", { name: "Check your email" })).toBeVisible();
+    const verification = await waitForEmail({
+      to: accounts.reviewer.email,
+      subject: "Verify your email: Recruvault",
+      after: signedUpAfter,
+    });
+    await reviewerContext.clearCookies();
+    await reviewerPage.goto(verification.ctaUrl!);
+    await reviewerPage.waitForURL("**/invite/**");
+    await reviewerPage.getByRole("button", { name: `Accept and join ${organisationName}` }).click();
+    await reviewerPage.waitForURL("**/vault/unlock**");
+    await unlockIfNeeded(reviewerPage, vaultKeys.get(accounts.owner.email) ?? "");
+    await expect(reviewerPage.getByRole("heading", { name: "Shared with me" })).toBeVisible();
+    await reviewerContext.storageState({ path: REVIEWER_STATE });
+    await reviewerContext.close();
+
+    // The link works once.
+    const reuseContext = await browser.newContext({ baseURL: BASE_URL });
+    const reusePage = await reuseContext.newPage();
+    await reusePage.goto(invitation.ctaUrl!);
+    await expect(reusePage.getByRole("heading", { name: "Invitation already used" })).toBeVisible();
+    await reuseContext.close();
   });
 });
 
@@ -394,6 +433,7 @@ test("creates a role and enforces recruiter-only permissions", async ({ browser 
     await page.reload();
     const revokedDelivery = page.getByRole("listitem").filter({ hasText: revokedEmail });
     await revokedDelivery.getByRole("button", { name: "Revoke" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Revoke link" }).click();
     await expect(toast(page)).toContainText("Secure link revoked");
     const revokedContext = await browser.newContext({ baseURL: BASE_URL });
     const revokedPage = await revokedContext.newPage();
@@ -482,6 +522,14 @@ test("job seeker manages documents, profile, saved roles, and an application", a
 
     const coverLetter = page.getByRole("listitem").filter({ hasText: "Acacia-Cover-Letter.pdf" });
     await coverLetter.getByRole("button", { name: "Delete" }).click();
+    // Cancel first: nothing is deleted and focus returns to the trigger.
+    const confirmDelete = page.getByRole("dialog");
+    await expect(confirmDelete).toContainText("cannot be undone");
+    await confirmDelete.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByText("Acacia-Cover-Letter.pdf")).toBeVisible();
+    await expect(coverLetter.getByRole("button", { name: "Delete" })).toBeFocused();
+    await coverLetter.getByRole("button", { name: "Delete" }).click();
+    await confirmDelete.getByRole("button", { name: "Delete document" }).click();
     await expect(toast(page)).toContainText("Document deleted");
     await expect(page.getByText("Acacia-Cover-Letter.pdf")).toHaveCount(0);
   });
@@ -503,6 +551,7 @@ test("job seeker manages documents, profile, saved roles, and an application", a
       hasText: "Security clearance level",
     });
     await clearanceLevel.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete credential" }).click();
     await expect(toast(page)).toContainText("Credential deleted");
     await expect(clearanceLevel).toHaveCount(0);
 
@@ -705,6 +754,10 @@ test("recruiter progresses and shares an application while reviewer stays read-o
     await expect(toast(owner.page)).toContainText("shared with the reviewer");
     await owner.page.getByRole("button", { name: "Share", exact: true }).click();
     await expect(toast(owner.page)).toContainText("shared with the reviewer");
+    await owner.page.reload();
+    await expect(
+      owner.page.getByRole("button", { name: `Remove access for ${accounts.reviewer.email}` }),
+    ).toBeVisible();
     await capture(owner.page, "20-placed-candidate.png");
   });
 
@@ -719,11 +772,11 @@ test("recruiter progresses and shares an application while reviewer stays read-o
 
   await test.step("allow shared read-only access and block reviewer administration", async () => {
     const reviewer = await newAuthenticatedPage(browser, REVIEWER_STATE);
-    await reviewer.page.goto(`/dashboard/requests/${requestId}/submissions/${submissionId}`);
+    await reviewer.page.goto("/dashboard");
     await unlockIfNeeded(reviewer.page, vaultKeys.get(accounts.owner.email) ?? "");
-    if (!reviewer.page.url().includes("/submissions/")) {
-      await reviewer.page.goto(`/dashboard/requests/${requestId}/submissions/${submissionId}`);
-    }
+    const shared = reviewer.page.getByRole("region", { name: "Shared with me" });
+    await shared.getByRole("link", { name: new RegExp(roleTitle) }).click();
+    await reviewer.page.waitForURL(`**/dashboard/requests/${requestId}/submissions/${submissionId}`);
     await expect(reviewer.page.getByText("AGSVA-CL-2048", { exact: true })).toBeVisible();
     await expect(reviewer.page.getByLabel("Set status")).toHaveCount(0);
     await capture(reviewer.page, "23-reviewer-read-only.png");
@@ -818,6 +871,7 @@ test("recruiter progresses and shares an application while reviewer stays read-o
     await member.getByRole("button", { name: "Change" }).click();
     await expect(toast(owner.page)).toContainText("Member role updated");
     await member.getByRole("button", { name: "Remove" }).click();
+    await owner.page.getByRole("dialog").getByRole("button", { name: "Remove member" }).click();
     await expect(toast(owner.page)).toContainText("Member removed");
   });
 
@@ -854,6 +908,7 @@ test("recruiter progresses and shares an application while reviewer stays read-o
   await test.step("crypto-shred the application through the recruiter UI", async () => {
     await owner.page.goto(`/dashboard/requests/${requestId}/submissions/${submissionId}`);
     await owner.page.getByRole("button", { name: "Delete (crypto-shred)" }).click();
+    await owner.page.getByRole("dialog").getByRole("button", { name: "Delete permanently" }).click();
     await expect(toast(owner.page)).toContainText("Application data deleted");
     await expect(owner.page.getByText(/data was purged/i)).toBeVisible();
     await owner.page.goto(`/dashboard/requests/${requestId}`);

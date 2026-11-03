@@ -19,7 +19,8 @@ import { AuthError, requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "
 import { assertSubmissionAccess, canManageRequest } from "@/lib/review";
 import { audit } from "@/lib/audit";
 import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
-import { queueRequestDelivery } from "@/lib/requests-service";
+import { queueRequestDelivery, setRequestStatusCore } from "@/lib/requests-service";
+import { ApiError } from "@/lib/api/http";
 import { activeVault } from "@/lib/vault-store";
 import { readUnlockedCustomerKey } from "@/lib/vault-session";
 import { discardProtectedUploads, protectDocument, putProtectedObject } from "@/lib/document-protect";
@@ -411,43 +412,12 @@ export async function revokeAccessToken(formData: FormData): Promise<ActionResul
 export async function setRequestStatus(formData: FormData): Promise<ActionResult> {
   const ctx = await requireUnlockedOrg("requests:create");
   const requestId = String(formData.get("requestId") ?? "");
-  const status = String(formData.get("status") ?? "");
-  if (!["open", "closing_soon", "closed", "archived"].includes(status)) {
-    return { ok: false, error: "Invalid status." };
+  try {
+    await setRequestStatusCore(ctx, requestId, String(formData.get("status") ?? ""), await requestMeta());
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    throw err;
   }
-
-  const [request] = await db
-    .select()
-    .from(requests)
-    .where(and(eq(requests.id, requestId), eq(requests.orgId, ctx.orgId)));
-  if (!request || !canManageRequest(ctx, request)) return { ok: false, error: "Request not found." };
-
-  await db
-    .update(requests)
-    .set({
-      status: status as "open" | "closing_soon" | "closed" | "archived",
-      // Reopening clears the close time so purge-on-close retention cannot
-      // count a reopened role's new applications from the earlier close.
-      closedAt:
-        status === "closed"
-          ? new Date()
-          : status === "open" || status === "closing_soon"
-            ? null
-            : request.closedAt,
-    })
-    .where(eq(requests.id, requestId));
-
-  const meta = await requestMeta();
-  await audit({
-    orgId: ctx.orgId,
-    actorType: "org_user",
-    actorId: ctx.userId,
-    action: `request.status.${status}`,
-    targetType: "request",
-    targetId: requestId,
-    ...meta,
-  });
-
   revalidatePath(`/dashboard/requests/${requestId}`);
   return { ok: true };
 }

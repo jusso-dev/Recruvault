@@ -108,8 +108,8 @@ This is a passion project: public, MIT-licensed, and self-hostable by anyone. Is
 
 ## Features
 
-- **Organisations, users, and RBAC** — Owner / Admin / Recruiter / Reviewer / Compliance roles, enforced in the data layer (tenant + ownership checks on every read), never just the UI (`src/lib/rbac.ts`, `src/lib/guards.ts`).
-- **Job seeker application workspace** — track drafts and submitted applications through shortlist, interview, offer, and placement. Save relevant roles and see the current stage without searching through email.
+- **Organisations, users, and RBAC** — Owner / Admin / Recruiter / Reviewer / Compliance roles, enforced in the data layer (tenant + ownership checks on every read), never just the UI (`src/lib/rbac.ts`, `src/lib/guards.ts`). Owners and admins add teammates by emailed invitation (single use, 7-day expiry, revocable); the invitee joins with a verified matching address and then unlocks with the organisation encryption key. Reviewers see applications shared with them on their dashboard, and the role owner or an admin can remove that access.
+- **Job seeker application workspace** — track drafts and submitted applications through shortlist, interview, offer, and placement. Save relevant roles, see the current stage without searching through email, and withdraw an active application.
 - **Career documents and credentials** — keep current resumes, cover letters, and reusable clearance details together, with field-level encryption, a consent ledger, and per-share revocation. Identity documents, right-to-work evidence, and police-check documents are intentionally excluded.
 - **Recruiter placement pipeline** — manage active roles and move each candidate through review, shortlist, interview, offer, and placement with a clear action queue and audited status history.
 - **Dual-consent matched role alerts** — recruiters opt in at organisation level and choose a minimum skill-match threshold; job seekers independently subscribe with skills, locations, employment types, work arrangements, and salary/rate preferences. Only open, listed roles generate deduplicated emails, and matching never exposes job-seeker identity, profile data, or documents to recruiters.
@@ -148,7 +148,7 @@ npx inngest-cli@latest dev -u http://localhost:3000/api/inngest   # background j
 
 Open `http://localhost:3000`. A fresh installation redirects to `/setup`, where the first recruiter creates the owner account and organisation. Once an organisation exists, `/setup` redirects to sign-in.
 
-Recruiter self-registration is controlled by `ALLOW_RECRUITER_SIGNUP`. The local `.env.example` sets it to `true` so the recruiter flow can be tested. Set it to `false` in production after the first owner uses `/setup`; job seekers can continue registering from `/sign-up`. The API enforces this setting as well as the visible form.
+Recruiter self-registration is controlled by `ALLOW_RECRUITER_SIGNUP`. The local `.env.example` sets it to `true` so the recruiter flow can be tested. Set it to `false` in production after the first owner uses `/setup`; job seekers can continue registering from `/sign-up`. The API enforces this setting as well as the visible form. Teammates join through invitations from **Settings → Users and roles**, which work with self-registration closed. An invitation cannot convert a job-seeker account that already holds applications, documents, or an encryption key.
 
 For screenshot-ready local data, first create one recruiter and one job-seeker account through the UI, then run:
 

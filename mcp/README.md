@@ -66,6 +66,8 @@ Add to the client's MCP config:
 | `send_request` | `invitations:send` | Send the secure link to an email or a candidate handle |
 | `list_requests` | `roles:read` | List your organisation's requests |
 | `get_submissions` | `submissions:read` | List submission metadata for a request |
+| `update_request_status` | `roles:write` | Set a role to open, closing soon, closed, or archived |
+| `update_submission_status` | `submissions:write` | Move an application to a pipeline stage |
 | `get_recruiter_report` | `reports:read` | Report on unfilled roles, application trends, outstanding information, deadlines, and weekly priorities |
 | `list_applications` | `applications:read` | List the job seeker's own applications and stages |
 | `list_career_documents` | `documents:read` | List resume and cover-letter metadata and scan state |

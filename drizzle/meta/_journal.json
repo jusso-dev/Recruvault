@@ -92,6 +92,13 @@
       "when": 1791966860693,
       "tag": "0012_document_erasure_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793704534739,
+      "tag": "0013_org_invitations",
+      "breakpoints": true
     }
   ]
 }

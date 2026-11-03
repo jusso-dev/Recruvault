@@ -8,7 +8,7 @@ import { Button, ButtonLink, Card, CardContent } from "@/components/ui";
 import { SignOutButton } from "@/components/sign-out";
 import { useToast } from "@/components/toast";
 
-export function VerifyEmailPanel({ email }: { email: string }) {
+export function VerifyEmailPanel({ email, next = "/dashboard" }: { email: string; next?: string }) {
   const [busy, setBusy] = useState(false);
   const { showToast } = useToast();
 
@@ -17,7 +17,7 @@ export function VerifyEmailPanel({ email }: { email: string }) {
     try {
       const { error } = await authClient.sendVerificationEmail({
         email,
-        callbackURL: "/dashboard",
+        callbackURL: next,
       });
       if (error) {
         showToast({
@@ -71,7 +71,7 @@ export function VerifyEmailPanel({ email }: { email: string }) {
           <Button type="button" onClick={resendVerification} disabled={busy}>
             {busy ? "Sending…" : "Resend verification email"}
           </Button>
-          <ButtonLink href="/dashboard" variant="secondary">
+          <ButtonLink href={next} variant="secondary">
             I’ve verified my email
           </ButtonLink>
         </div>

@@ -43,6 +43,8 @@ Deleting one wallet document shreds its key, queues its object, and deletes the 
 | `access_tokens`, `deliveries` | Link recipient email and phone, delivery status | Recipient replaced with `redacted`, phone and OTP hash cleared | Same, for linked submissions |
 | `submission_shares` | Which reviewer can see a submission | Kept (ids only) | Same |
 
+`org_invitations` holds the invited email, role, inviter, expiry, and acceptance or revocation time for teammate invitations. It stores only a hash of the link token. Rows are deleted with the organisation.
+
 Responses sent through a secure link without signing in are organisation records. They follow the organisation's retention policy and are not reached by a job seeker's account deletion.
 
 Recruiter JDs and NDAs (`documents` with kind `jd`/`nda`) belong to the organisation. Replacing a JD or NDA through the API (`POST /api/v1/requests/{id}/jd` or `/nda`) shreds the old document's key and queues its object in the same transaction. Responders must accept a role's NDA before submitting; acceptance is stored as an `nda` consent row with the application.

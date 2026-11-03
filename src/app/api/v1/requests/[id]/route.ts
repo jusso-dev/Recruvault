@@ -5,6 +5,7 @@ import { requestFields, requests } from "@/db/schema";
 import { resolveOrgContext } from "@/lib/api-auth";
 import { ApiError, handle, json } from "@/lib/api/http";
 import { can } from "@/lib/rbac";
+import { setRequestStatusCore } from "@/lib/requests-service";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
@@ -51,5 +52,19 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       .orderBy(requestFields.sortOrder);
 
     return json({ ...request, fields });
+  });
+}
+
+/** Change a request's status (same rules as the dashboard). */
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  return handle(async () => {
+    const ctx = await resolveOrgContext(req, "requests:create", "roles:write");
+    const { id } = await params;
+    const body = await req.json().catch(() => {
+      throw new ApiError(400, "Invalid JSON body.");
+    });
+    const status = String(body?.status ?? "");
+    await setRequestStatusCore(ctx, id, status);
+    return json({ id, status });
   });
 }

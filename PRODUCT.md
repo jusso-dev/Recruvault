@@ -18,7 +18,7 @@ Success means recruiters know which candidates need action and can progress them
 
 Both audiences can connect trusted tools through a role-aware REST API or the included MCP server. Organisation keys inherit recruiter permissions; job-seeker keys are restricted to the owner's application and career-record data.
 
-A fresh installation starts with a one-time recruiter setup. The first user creates the verified owner account and organisation together; setup closes as soon as that organisation exists.
+A fresh installation starts with a one-time recruiter setup. The first user creates the verified owner account and organisation together; setup closes as soon as that organisation exists. Owners and admins then invite teammates by email; an invitation works once for a verified account with the invited address, and the new member still needs the organisation encryption key to open records.
 
 ## Brand Personality
 

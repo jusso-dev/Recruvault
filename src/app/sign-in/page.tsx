@@ -7,16 +7,17 @@ import { authClient } from "@/lib/auth-client";
 import { Button, Card, CardContent, Input, Label } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { userFacingError } from "@/lib/user-facing-errors";
+import { safeNextPath } from "@/lib/utils";
 
 function SignInForm() {
   const router = useRouter();
   const params = useSearchParams();
   const [busy, setBusy] = useState(false);
   const { showToast } = useToast();
+  const next = safeNextPath(params.get("next"));
 
   async function destination(): Promise<string> {
-    const next = params.get("next");
-    if (next && next.startsWith("/")) return next;
+    if (next) return next;
     const session = await authClient.getSession();
     const accountType = (session.data?.user as { accountType?: string } | undefined)
       ?.accountType;
@@ -61,7 +62,7 @@ function SignInForm() {
     }
     setBusy(true);
     try {
-      const { error } = await authClient.signIn.magicLink({ email, callbackURL: "/overview" });
+      const { error } = await authClient.signIn.magicLink({ email, callbackURL: next ?? "/overview" });
       if (error) {
         showToast({
           tone: "error",
@@ -141,7 +142,10 @@ function SignInForm() {
         </div>
         <p className="text-sm text-stone-600">
           New here?{" "}
-          <Link href="/sign-up" className="font-medium underline">
+          <Link
+            href={next ? `/sign-up?next=${encodeURIComponent(next)}` : "/sign-up"}
+            className="font-medium underline"
+          >
             Create an account
           </Link>
         </p>

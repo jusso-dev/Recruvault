@@ -254,6 +254,35 @@ export const memberships = pgTable(
   ],
 );
 
+// Teammate invitations. Only the token hash is stored; the emailed token is an
+// HMAC of the id (lib/link-token), so the delivery worker can rebuild it.
+export const orgInvitations = pgTable(
+  "org_invitations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+    // Lower-cased; acceptance requires a verified account with this address.
+    email: text("email").notNull(),
+    role: orgRole("role").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    invitedBy: text("invited_by").references(() => user.id, { onDelete: "set null" }),
+    expiresAt: timestamp("expires_at").notNull(),
+    acceptedAt: timestamp("accepted_at"),
+    acceptedBy: text("accepted_by").references(() => user.id, { onDelete: "set null" }),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("org_invitations_org_idx").on(t.orgId),
+    // One open invitation per address per organisation.
+    uniqueIndex("org_invitations_open_idx")
+      .on(t.orgId, t.email)
+      .where(sql`${t.acceptedAt} is null and ${t.revokedAt} is null`),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // Job seeker world
 // ---------------------------------------------------------------------------

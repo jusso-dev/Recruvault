@@ -42,6 +42,9 @@ export const eventSchemas = {
   "retention/purge.submission": z.object({
     submissionId: z.string().uuid(),
   }),
+  "org-invite/send": z.object({
+    invitationId: z.string().uuid(),
+  }),
 } as const;
 
 export type EventName = keyof typeof eventSchemas;

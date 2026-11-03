@@ -63,7 +63,7 @@ export async function resolveOrgUser(permission?: Permission): Promise<OrgAccess
     };
   }
   // Org accounts must verify their email before acting: createOrganisation and
-  // addMember trust the address for membership matching, so an unverified one
+  // invitation acceptance trust the address for membership matching, so an unverified one
   // must not be able to create orgs or send requests.
   if (!(session.user as { emailVerified?: boolean }).emailVerified) {
     return {

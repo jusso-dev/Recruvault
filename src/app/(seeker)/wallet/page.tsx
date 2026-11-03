@@ -110,7 +110,15 @@ export default async function WalletPage() {
                     <p className="font-medium text-stone-800">{item.label}</p>
                     <p className="mt-0.5 truncate text-stone-500">{item.value}</p>
                   </div>
-                  <ActionForm action={deleteWalletItem} successMessage="Credential deleted.">
+                  <ActionForm
+                    action={deleteWalletItem}
+                    successMessage="Credential deleted."
+                    confirm={{
+                      title: `Delete ${item.label}?`,
+                      body: "The stored value is crypto-shredded and cannot be recovered. You can add the credential again later.",
+                      confirmLabel: "Delete credential",
+                    }}
+                  >
                     <input type="hidden" name="id" value={item.id} />
                     <Button type="submit" variant="ghost" size="sm">
                       Delete

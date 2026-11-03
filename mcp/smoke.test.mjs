@@ -77,6 +77,48 @@ test("a reporting key exposes only read tools and write errors are actionable", 
   }
 });
 
+test("status tools send PATCH requests for keys with write scopes", async () => {
+  const requestId = "11111111-1111-4111-8111-111111111111";
+  const submissionId = "22222222-2222-4222-8222-222222222222";
+  const api = await mockApi(
+    { body: { key: { kind: "organisation", scopes: ["roles:write", "submissions:write"], expiresAt: null } } },
+    {
+      [`PATCH /api/v1/requests/${requestId}`]: { body: { id: requestId, status: "closed" } },
+      [`PATCH /api/v1/submissions/${submissionId}`]: {
+        status: 403,
+        body: { error: "This submission has not been shared with you." },
+      },
+    },
+  );
+  const client = await connect(api.url);
+  try {
+    const names = await toolNames(client);
+    assert.ok(names.includes("update_request_status"));
+    assert.ok(names.includes("update_submission_status"));
+    assert.ok(!names.includes("get_submissions"));
+
+    const closed = await client.callTool({ name: "update_request_status", arguments: { requestId, status: "closed" } });
+    assert.notEqual(closed.isError, true);
+    assert.match(closed.content[0].text, /"status": "closed"/);
+
+    const denied = await client.callTool({
+      name: "update_submission_status",
+      arguments: { submissionId, status: "shortlisted" },
+    });
+    assert.equal(denied.isError, true);
+    assert.match(denied.content[0].text, /Required scope: submissions:write/);
+
+    const invalid = await client.callTool({ name: "update_request_status", arguments: { requestId, status: "deleted" } });
+    assert.equal(invalid.isError, true);
+
+    const patches = api.calls.filter((call) => call.method === "PATCH").map((call) => call.url);
+    assert.deepEqual(patches, [`/api/v1/requests/${requestId}`, `/api/v1/submissions/${submissionId}`]);
+  } finally {
+    await client.close();
+    api.server.close();
+  }
+});
+
 test("a job-seeker key never exposes recruiter tools", async () => {
   const api = await mockApi({
     body: { key: { kind: "candidate", scopes: ["profile:read", "profile:write"], expiresAt: null } },

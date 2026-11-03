@@ -220,6 +220,47 @@ tool(
 );
 
 tool(
+  "update_request_status",
+  {
+    kind: "organisation",
+    scope: "roles:write",
+    title: "Change a role's status",
+    description: "Set a request to open, closing_soon, closed, or archived.",
+    inputSchema: { requestId: z.string(), status: z.enum(["open", "closing_soon", "closed", "archived"]) },
+  },
+  ({ requestId, status }, scope) =>
+    api(`/requests/${encodeURIComponent(requestId)}`, { method: "PATCH", body: { status }, scope }),
+);
+
+tool(
+  "update_submission_status",
+  {
+    kind: "organisation",
+    scope: "submissions:write",
+    title: "Move an application to a stage",
+    description:
+      "Move a submission through the placement pipeline. Only the request owner, roles that see all submissions, or users it was shared with (whose role manages status) can change it.",
+    inputSchema: {
+      submissionId: z.string(),
+      status: z.enum([
+        "received",
+        "under_review",
+        "shortlisted",
+        "interview",
+        "offer",
+        "accepted",
+        "placed",
+        "follow_up",
+        "declined",
+        "withdrawn",
+      ]),
+    },
+  },
+  ({ submissionId, status }, scope) =>
+    api(`/submissions/${encodeURIComponent(submissionId)}`, { method: "PATCH", body: { status }, scope }),
+);
+
+tool(
   "get_recruiter_report",
   {
     kind: "organisation",
