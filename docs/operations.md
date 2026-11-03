@@ -192,7 +192,7 @@ On a versioned bucket set `S3_DELETE_ALL_VERSIONS=true` so deletion removes ever
 
 ## Nightly backups
 
-An organisation owner configures Cloudflare R2 from Organisation settings. The server encrypts the database dump and document objects with a 256-bit backup key, then uploads one `.rvbak` object. R2 stores ciphertext only. The raw backup key is shown once and is not the workspace encryption key. A wrapped copy stays in the database so the hourly job can run after the chosen UTC hour if that day's backup has not succeeded. Workspace encryption keys are not in the archive. Restoring a backup does not recover a lost workspace key, and it can resurrect ciphertext from before a deletion.
+The owner of the platform organisation (the one created during first-owner setup) configures Cloudflare R2 from Organisation settings. Owners of other organisations cannot see or change backups, because each archive holds every tenant. The server encrypts the database dump and document objects with a 256-bit backup key, then uploads one `.rvbak` object. R2 stores ciphertext only. The raw backup key is shown once and is not the workspace encryption key. A wrapped copy stays in the database so the hourly job can run after the chosen UTC hour if that day's backup has not succeeded. Workspace encryption keys are not in the archive. Restoring a backup does not recover a lost workspace key, and it can resurrect ciphertext from before a deletion.
 
 Losing the workspace encryption key is permanent for the records it protects. Losing only the displayed backup key does not stop nightly backups while `LOCAL_KEK` and the database remain. Losing both the backup key and `LOCAL_KEK` makes every existing R2 archive unreadable.
 
