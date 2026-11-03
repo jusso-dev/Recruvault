@@ -127,7 +127,7 @@ This is a passion project: public, MIT-licensed, and self-hostable by anyone. Is
 
 Next.js 16.4 (App Router) · React 19.3 · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/SNS (or MinIO) · ClamAV · Docker Compose.
 
-Interactive API documentation is available at `/api/v1/docs`, with the OpenAPI 3.1 document at `/api/v1/openapi.json`. Signed-in users can create scoped keys, copy MCP configuration, or copy a ready-to-use coding-agent setup prompt from **API & MCP** in their workspace navigation.
+An API reference is available at `/api/v1/docs` (a script-free page that cannot be framed), with the OpenAPI 3.1 document at `/api/v1/openapi.json`. Browser clients on another origin need that origin in `API_CORS_ORIGINS`; see [Browser security policy](docs/operations.md#browser-security-policy). Signed-in users can create scoped keys, copy MCP configuration, or copy a ready-to-use coding-agent setup prompt from **API & MCP** in their workspace navigation.
 
 ## Local development
 
