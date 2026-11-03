@@ -153,23 +153,14 @@ export default async function RespondPage({
           </CardHeader>
           <CardContent>
             <div className="relative overflow-hidden rounded-lg border border-stone-200">
-              <object
-                data={`/api/documents/${jd.id}/view`}
-                type="application/pdf"
+              {/* An iframe, not <object>: the page CSP keeps object-src 'none' and
+                  allows same-origin frames, and the document route allows
+                  framing only by this origin. */}
+              <iframe
+                src={`/api/documents/${jd.id}/view`}
                 className="h-[480px] w-full"
-                aria-label="Job description PDF"
-              >
-                <p className="p-4 text-sm">
-                  <a
-                    className="underline"
-                    href={`/api/documents/${jd.id}/view`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open the job description
-                  </a>
-                </p>
-              </object>
+                title="Job description PDF"
+              />
               {/* Dynamic watermark: responder identity + timestamp, deterrence for screenshots. */}
               <div
                 aria-hidden
