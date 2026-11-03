@@ -74,12 +74,20 @@ configuration and database tooling.
 
 ## Unresolved upstream findings
 
-As assessed on 14 October 2026, braces 3.0.3 has a high-severity
-[stack-exhaustion advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
-(CVE-2026-93687) with no published fixed version. The dependency is used by
-Next.js ESLint tooling through fast-glob and micromatch. Lint only trusted
-repository inputs; this restriction is a mitigation, not a fix. A full npm
-audit can report several affected packages along that dependency chain.
+The braces 3.0.3 advisory (GHSA-vfj7-8cjw-p6xm) was withdrawn by GitHub on
+23 October 2026. braces 3.0.3 is still the latest release and is still in the
+Next.js ESLint tooling chain; it is no longer reported by audits.
+
+As assessed on 3 November 2026, the full development audit reports minimatch
+3.1.5 ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249),
+moderate). ESLint and its React/import/a11y plugins call the minimatch 3 API,
+and the patched 11.x line is not a drop-in replacement. Lint only trusted
+repository inputs; this restriction is a mitigation, not a fix. Other
+glob/minimatch consumers are overridden to patched releases:
+`@sentry/bundler-plugins`, `rimraf` (runtime, via Inngest telemetry), and
+`archiver-utils`, `readdir-glob`, `@typescript-eslint/typescript-estree`
+(development). Remove each override once its upstream range includes a patched
+version.
 
 Track this and other scan findings in
 [the dependency-remediation issue](https://github.com/jusso-dev/Recruvault/issues/36).
