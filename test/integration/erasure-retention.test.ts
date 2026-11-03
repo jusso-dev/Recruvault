@@ -9,6 +9,7 @@ import {
   dataKeys,
   deletionTasks,
   discoveryProfiles,
+  documentMigrations,
   documents,
   auditEvents,
   erasureRecords,
@@ -314,6 +315,60 @@ describe("reconciler", () => {
     expect(await objectExists(orphan)).toBe(false);
     expect(await objectExists(kept.storageKey)).toBe(true);
     expect(await objectExists(unrelated)).toBe(true);
+  });
+});
+
+describe("orphan key reconciliation", () => {
+  it("shreds day-old document and draft keys that nothing references, and nothing else", async () => {
+    const org = await createOrgWithVault(db);
+    const link = await createRequestWithLink(db, org);
+    const submissionId = await createSubmission(db, link);
+    const kept = await storeEvidence(org, link, submissionId);
+    const sealed = (purpose: string) =>
+      crypto.createDataKey(db, {
+        mode: "sealed",
+        recipientPublicKey: org.vault!.publicKey,
+        ownerType: "organisation",
+        ownerId: org.orgId,
+        purpose,
+        keyVersion: org.vault!.version,
+      });
+    const draftKey = () =>
+      crypto.createDataKey(db, { mode: "link", linkSecret: "synthetic", purpose: "draft", linkId: link.accessTokenId });
+
+    const orphanDocument = (await sealed("evidence")).dekId;
+    const orphanJd = (await sealed("jd")).dekId;
+    const orphanDraft = (await draftKey()).dekId;
+    const youngOrphan = (await sealed("evidence")).dekId;
+    const submissionKey = (await sealed("submission")).dekId;
+    const migrating = (await sealed("evidence")).dekId;
+    await db.insert(documentMigrations).values({
+      tableName: "documents",
+      documentId: randomUUID(),
+      oldStorageKey: `legacy/${randomUUID()}`,
+      newStorageKey: `org/${org.orgId}/${randomUUID()}`,
+      dekId: migrating,
+      state: "uploading",
+    });
+    const liveDraft = await draftKey();
+    const draftSubmission = await createSubmission(db, link, { status: "started" });
+    await db.insert(submissionValues).values({
+      submissionId: draftSubmission,
+      fieldId: link.textFieldId,
+      valueEncrypted: await crypto.encryptFieldWithKey("kept draft", liveDraft.dek),
+      dekId: liveDraft.dekId,
+    });
+
+    const old = [orphanDocument, orphanJd, orphanDraft, submissionKey, migrating, liveDraft.dekId, kept.dekId];
+    await db.update(dataKeys).set({ createdAt: new Date(Date.now() - 2 * DAY) }).where(inArray(dataKeys.id, old));
+
+    const report = await reconciler.reconcileStorage();
+    expect(report.orphanKeysShredded).toBe(3);
+    for (const id of [orphanDocument, orphanJd, orphanDraft]) expect(await isShredded(id), id).toBe(true);
+    for (const id of [youngOrphan, submissionKey, migrating, liveDraft.dekId, kept.dekId]) {
+      expect(await isShredded(id), id).toBe(false);
+    }
+    expect((await reconciler.reconcileStorage()).orphanKeysShredded).toBe(0);
   });
 });
 

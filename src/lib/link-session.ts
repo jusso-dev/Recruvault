@@ -1,5 +1,5 @@
 import "server-only";
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 
 /**
@@ -10,6 +10,7 @@ import { cookies } from "next/headers";
  */
 
 const COOKIE = "rv_link_session";
+const DRAFT_COOKIE = "rv_link_draft";
 const TTL_MS = 60 * 60 * 1000; // 1 hour
 
 function secret(): string {
@@ -38,12 +39,39 @@ export async function issueLinkSession(accessTokenId: string): Promise<void> {
   });
 }
 
-/** Raw cookie used to wrap in-progress drafts. Null when the session is missing or expired. */
-export async function readLinkSessionSecret(): Promise<string | null> {
-  const tokenId = await readLinkSession();
-  if (!tokenId) return null;
+/**
+ * Draft secrets. A saved draft is wrapped with a random per-link secret held
+ * only in this browser, in its own httpOnly cookie scoped to the link's path
+ * and living as long as the link. It is independent of the one-hour session,
+ * so a responder who re-verifies after the session lapses still opens their
+ * draft. An existing secret is never replaced, or the draft would be lost.
+ */
+export async function ensureDraftSecret(
+  accessTokenId: string,
+  rawToken: string,
+  linkExpiresAt: Date,
+): Promise<void> {
+  if (await readDraftSecret(accessTokenId)) return;
+  const maxAge = Math.floor((linkExpiresAt.getTime() - Date.now()) / 1000);
+  if (maxAge <= 0) return;
   const jar = await cookies();
-  return jar.get(COOKIE)?.value ?? null;
+  jar.set(DRAFT_COOKIE, `${accessTokenId}.${randomBytes(32).toString("base64url")}`, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: `/r/${encodeURIComponent(rawToken)}`,
+    maxAge,
+  });
+}
+
+/** The draft secret for this link, or null when this browser holds none. */
+export async function readDraftSecret(accessTokenId: string): Promise<string | null> {
+  const jar = await cookies();
+  const raw = jar.get(DRAFT_COOKIE)?.value;
+  if (!raw) return null;
+  const at = raw.indexOf(".");
+  if (at <= 0 || raw.slice(0, at) !== accessTokenId) return null;
+  return raw.slice(at + 1) || null;
 }
 
 /** Returns the verified access token id, or null. */

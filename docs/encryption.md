@@ -41,7 +41,7 @@ Every data-key envelope authenticates `owner type | owner id | data key id | pur
 | Enrolled | Revoking links and shares; deleting templates, submissions, wallet items, and documents; removing a member |
 | Neither | Account erasure, which stays available to someone who has lost their key (it requires typing `DELETE`) |
 
-REST and MCP callers use the same rules through API keys that carry a delegation of the customer key (see below). A secure-link draft is refused when the requesting organisation has not enrolled. Organisation creation, first-owner setup, and job-seeker onboarding all include the key step.
+REST and MCP callers use the same rules through API keys that carry a delegation of the customer key (see below). A secure-link draft is refused when the requesting organisation has not enrolled. Draft answers are wrapped with a random per-link secret held only in the responder's browser, in an httpOnly cookie scoped to that link's path that lasts as long as the link, so a draft survives the one-hour link session and can be reopened after verifying again in the same browser. A draft that browser cannot open is discarded and the responder is told; its key is shredded, as it is on final submit. Organisation creation, first-owner setup, and job-seeker onboarding all include the key step.
 
 ### Unlock behaviour
 
@@ -88,7 +88,7 @@ Setup is open only until the `platform_bootstrap` row is consumed. That row, not
 2. The emailed verification link returns to `/setup`. Setup never marks an address verified itself.
 3. The verified account submits the organisation name, `BOOTSTRAP_TOKEN`, and a new customer key. Under an advisory lock, in one transaction, the server checks the token in constant time, makes the account an organisation account, creates the organisation, owner membership, and vault key, and consumes the bootstrap row. Concurrent claims produce exactly one owner.
 
-The token is accepted only in the Server Action body, never in a URL. Attempts are rate limited per client address and across the whole deployment. Failures are audited without the token. Ordinary organisation creation is refused until bootstrap completes. If an organisation exists without an owner (an interrupted pre-bootstrap install), only `BOOTSTRAP_RECOVERY_TOKEN` can adopt it, and the claimant must present that organisation's existing customer key.
+The token is accepted only in the Server Action body, never in a URL. Attempts are rate limited per client address. Wrong tokens also count against a deployment-wide budget, which never blocks the operator's token. Failures are audited without the token. Ordinary organisation creation is refused until bootstrap completes. If an organisation exists without an owner (an interrupted pre-bootstrap install), only `BOOTSTRAP_RECOVERY_TOKEN` can adopt it, and the claimant must present that organisation's existing customer key.
 
 ## Documents
 

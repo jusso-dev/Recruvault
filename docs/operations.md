@@ -123,7 +123,7 @@ Retention purges follow steps 2 and 3 for one submission. A process that dies be
 
 The queue claims tasks with `FOR UPDATE SKIP LOCKED` and a 5-minute lease, retries with backoff up to 8 attempts, then marks the task `dead` and logs an error with the task id. An object S3 reports as missing counts as deleted; a missing bucket does not. After fixing the cause, requeue dead tasks with `retryDeadDeletionTasks()` from `src/lib/deletion-queue.ts`; repeating it is safe.
 
-`reconcile-storage` runs hourly. It queues objects under `org/` and `wallet/` that no row, in-flight migration, or open task references and that are older than 24 hours, reports pending, stuck (3+ attempts or older than a day), and dead tasks, finishes erasure records whose cleanup is done, and prunes completed tasks after 90 days. Its log line holds counts only and is logged at error level when anything is stuck or dead.
+`reconcile-storage` runs hourly. It queues objects under `org/` and `wallet/` that no row, in-flight migration, or open task references and that are older than 24 hours, reports pending, stuck (3+ attempts or older than a day), and dead tasks, finishes erasure records whose cleanup is done, shreds document and draft data keys that no row references once they are 24 hours old, and prunes completed tasks after 90 days. Its log line holds counts only and is logged at error level when anything is stuck or dead.
 
 On a versioned bucket set `S3_DELETE_ALL_VERSIONS=true` so deletion removes every version. Backups keep deleted ciphertext and wrapped keys until they expire; see [Restore](#restore).
 
