@@ -243,7 +243,8 @@ describe("draft restore", () => {
     const org = await createOrgWithVault(db);
     const l = await createRequestWithLink(db, org);
     await db.update(requestFields).set({ required: false }).where(eq(requestFields.id, l.fieldId));
-    await db.update(requests).set({ ndaDocumentId: crypto.randomUUID() }).where(eq(requests.id, l.requestId));
+    const ndaDocumentId = crypto.randomUUID();
+    await db.update(requests).set({ ndaDocumentId }).where(eq(requests.id, l.requestId));
     await db.update(accessTokens).set({ verifiedAt: new Date() }).where(eq(accessTokens.id, l.accessTokenId));
     const browser = await responder(l.accessTokenId);
 
@@ -252,9 +253,20 @@ describe("draft restore", () => {
     const refused = await asBrowser(browser, () => link.submitResponse(withoutNda));
     expect(refused).toEqual({ ok: false, error: expect.stringMatching(/accept the NDA/) });
 
+    // Accepting an NDA other than the role's current one is refused.
+    const stale = draft(l.textFieldId, "answer");
+    stale.set("consent", "on");
+    stale.set("nda", "on");
+    stale.set("ndaDocumentId", crypto.randomUUID());
+    expect(await asBrowser(browser, () => link.submitResponse(stale))).toEqual({
+      ok: false,
+      error: expect.stringMatching(/NDA for this role has changed/),
+    });
+
     const accepted = draft(l.textFieldId, "answer");
     accepted.set("consent", "on");
     accepted.set("nda", "on");
+    accepted.set("ndaDocumentId", ndaDocumentId);
     expect((await asBrowser(browser, () => link.submitResponse(accepted))).ok).toBe(true);
     const [submission] = await db.select().from(submissions).where(eq(submissions.accessTokenId, l.accessTokenId));
     const recorded = await db.select().from(consents).where(eq(consents.submissionId, submission.id));

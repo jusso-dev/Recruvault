@@ -299,6 +299,7 @@ export default async function RespondPage({
             {request.ndaDocumentId && (
               <label className="flex items-start gap-2 text-sm">
                 <input type="checkbox" name="nda" required className="mt-0.5" />
+                <input type="hidden" name="ndaDocumentId" value={request.ndaDocumentId} />
                 <span>
                   I have read and accept the{" "}
                   {nda && nda.scanStatus === "clean" ? (

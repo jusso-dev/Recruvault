@@ -232,6 +232,11 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
   if (request.ndaDocumentId && formData.get("nda") !== "on") {
     return { ok: false, error: "You must accept the NDA to continue." };
   }
+  // Acceptance covers the NDA the responder was shown, not a replacement
+  // uploaded while they had the form open.
+  if (request.ndaDocumentId && formData.get("ndaDocumentId") !== request.ndaDocumentId) {
+    return { ok: false, error: "The NDA for this role has changed. Reload the page, review it, and accept again." };
+  }
 
   const fields = await db
     .select()

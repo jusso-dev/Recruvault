@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { NextRequest } from "next/server";
-import { documents, memberships, requests, submissionDocuments, submissionShares, submissionValues, user } from "@/db/schema";
+import { documents, memberships, requests, submissionDocuments, submissions, submissionShares, submissionValues, user } from "@/db/schema";
 import { setupMigratedDatabase } from "./harness";
 import { startObjectStore, type TestObjectStore } from "./object-store";
 import { createOrgWithVault, createRequestWithLink, createSubmission, samplePdf } from "./fixtures";
@@ -283,6 +283,41 @@ describe("setRequestStatus", () => {
         .where(and(eq(requests.id, requestA.requestId), eq(requests.status, status as "open" | "closing_soon")));
       expect(row.closedAt).toBeNull();
     }
+  });
+});
+
+describe("retention clock", () => {
+  it("keeps the first close time, starts it on archive, and drops a lapsed expiry on reopen", async () => {
+    const role = await createRequestWithLink(db, { orgId: org.orgId, ownerUserId: recruiterA.userId });
+    const set = (status: string) =>
+      asBrowser(recruiterA.browser, () => requestActions.setRequestStatus(form({ requestId: role.requestId, status })));
+    const row = async () => (await db.select().from(requests).where(eq(requests.id, role.requestId)))[0];
+
+    expect((await set("closed")).ok).toBe(true);
+    const firstClose = (await row()).closedAt!;
+    expect((await set("closed")).ok).toBe(true);
+    expect((await row()).closedAt).toEqual(firstClose);
+    expect((await set("archived")).ok).toBe(true);
+    expect((await row()).closedAt).toEqual(firstClose);
+
+    await db.update(requests).set({ expiresAt: new Date(Date.now() - 40 * 86_400_000) }).where(eq(requests.id, role.requestId));
+    expect((await set("open")).ok).toBe(true);
+    expect(await row()).toMatchObject({ closedAt: null, expiresAt: null });
+
+    expect((await set("archived")).ok).toBe(true);
+    expect((await row()).closedAt).not.toBeNull();
+  });
+
+  it("does not move a withdrawn application back into the pipeline", async () => {
+    const role = await createRequestWithLink(db, { orgId: org.orgId, ownerUserId: recruiterA.userId });
+    const id = await createSubmission(db, role);
+    await db.update(submissions).set({ status: "withdrawn" }).where(eq(submissions.id, id));
+    const { setSubmissionStatus } = await import("@/actions/submissions");
+    const result = await asBrowser(recruiterA.browser, () =>
+      setSubmissionStatus(form({ submissionId: id, status: "shortlisted" })),
+    );
+    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/withdrawn/) });
+    expect((await db.select().from(submissions).where(eq(submissions.id, id)))[0].status).toBe("withdrawn");
   });
 });
 

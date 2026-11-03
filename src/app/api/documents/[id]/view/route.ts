@@ -175,7 +175,7 @@ export async function GET(
       headers: {
         ...commonHeaders,
         "Content-Type": "application/pdf",
-        "Content-Disposition": `inline; filename="${doc.fileName}"`,
+        "Content-Disposition": `inline; filename="${doc.fileName.replace(/[\r\n"]/g, "")}"`,
       },
     });
   }

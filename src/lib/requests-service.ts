@@ -342,19 +342,18 @@ export async function setRequestStatusCore(
         .where(and(eq(requests.id, requestId), eq(requests.orgId, ctx.orgId)))
     : [];
   if (!request || !canManageRequest(ctx, request)) throw new ApiError(404, "Request not found.");
+  const reopening = status === "open" || status === "closing_soon";
 
   await db
     .update(requests)
     .set({
       status: status as RequestStatus,
-      // Reopening clears the close time so purge-on-close retention cannot
-      // count a reopened role's new applications from the earlier close.
-      closedAt:
-        status === "closed"
-          ? new Date()
-          : status === "open" || status === "closing_soon"
-            ? null
-            : request.closedAt,
+      // Purge-on-close counts from the first close: closing again or archiving
+      // keeps that time, and archiving an open role starts it. Reopening clears
+      // it, and a lapsed expiry with it, so neither can purge the reopened
+      // role's new applications from an earlier date.
+      closedAt: reopening ? null : (request.closedAt ?? new Date()),
+      ...(reopening && request.expiresAt && request.expiresAt < new Date() ? { expiresAt: null } : {}),
     })
     .where(eq(requests.id, request.id));
 
@@ -390,6 +389,10 @@ export async function setSubmissionStatusCore(
     if (err instanceof AuthError && /not found/i.test(err.message)) throw new ApiError(404, err.message);
     throw err;
   }
+  // A withdrawal is the applicant's decision and a purge is final; neither is
+  // undone by a pipeline status change.
+  if (row.submission.purgedAt) throw new ApiError(409, "This application has been deleted.");
+  if (row.submission.status === "withdrawn") throw new ApiError(409, "This application was withdrawn.");
 
   await db
     .update(submissions)

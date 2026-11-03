@@ -58,6 +58,8 @@ const KEY_REFERENCES: AnyPgColumn[] = [
 ];
 
 /** Shred unreferenced document and draft keys older than the age threshold. */
+const ORPHAN_KEY_BATCH = 500;
+
 export async function shredOrphanKeys(minAgeMs = DEFAULT_ORPHAN_MIN_AGE_MS): Promise<number> {
   const unreferenced: SQL[] = KEY_REFERENCES.map((column) =>
     notExists(db.select({ one: sql`1` }).from(column.table).where(eq(column, dataKeys.id))),
@@ -72,7 +74,9 @@ export async function shredOrphanKeys(minAgeMs = DEFAULT_ORPHAN_MIN_AGE_MS): Pro
         lt(dataKeys.createdAt, new Date(Date.now() - minAgeMs)),
         ...unreferenced,
       ),
-    );
+    )
+    // Bounded per run; the hourly reconciler works through any backlog.
+    .limit(ORPHAN_KEY_BATCH);
   if (orphans.length > 0) {
     await db.transaction(async (tx) => {
       for (const { id } of orphans) await shredDataKey(id, tx);
