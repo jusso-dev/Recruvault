@@ -1,13 +1,13 @@
 "use server";
 
 import { createHash } from "crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { apiKeys, memberships, organisations } from "@/db/schema";
+import { apiKeys, memberships, organisations, orgInvitations, requests, submissions, submissionShares } from "@/db/schema";
 import { getSession, requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "@/lib/guards";
 import { audit } from "@/lib/audit";
-import { ASSIGNABLE_ROLES, type OrgRole } from "@/lib/rbac";
+import { ASSIGNABLE_ROLES, can, type OrgRole } from "@/lib/rbac";
 import {
   createSendingDomain,
   getSendingDomain,
@@ -100,6 +100,35 @@ export async function createOrganisation(formData: FormData): Promise<ActionResu
   return { ok: true, id: org.id };
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Open invitations carry their sender's authority, so they end with it. */
+async function revokeInvitationsSentBy(tx: Tx, orgId: string, userId: string) {
+  await tx
+    .update(orgInvitations)
+    .set({ revokedAt: new Date() })
+    .where(
+      and(
+        eq(orgInvitations.orgId, orgId),
+        eq(orgInvitations.invitedBy, userId),
+        isNull(orgInvitations.acceptedAt),
+        isNull(orgInvitations.revokedAt),
+      ),
+    );
+}
+
+/** Drop a member's submission shares within this organisation. */
+async function removeSharesFor(tx: Tx, orgId: string, userId: string) {
+  const orgSubmissions = tx
+    .select({ id: submissions.id })
+    .from(submissions)
+    .innerJoin(requests, eq(requests.id, submissions.requestId))
+    .where(eq(requests.orgId, orgId));
+  await tx
+    .delete(submissionShares)
+    .where(and(eq(submissionShares.userId, userId), inArray(submissionShares.submissionId, orgSubmissions)));
+}
+
 export async function updateMemberRole(formData: FormData): Promise<ActionResult> {
   const ctx = await requireUnlockedOrg("users:manage");
   const membershipId = String(formData.get("membershipId") ?? "");
@@ -113,7 +142,13 @@ export async function updateMemberRole(formData: FormData): Promise<ActionResult
   if (!m) return { ok: false, error: "Membership not found." };
   if (m.role === "owner") return { ok: false, error: "The owner role cannot be changed here." };
 
-  await db.update(memberships).set({ role }).where(eq(memberships.id, membershipId));
+  await db.transaction(async (tx) => {
+    await tx.update(memberships).set({ role }).where(eq(memberships.id, membershipId));
+    if (!can(role, "users:manage")) await revokeInvitationsSentBy(tx, ctx.orgId, m.userId);
+    // Shares grant reviewer access; a member who stops being a reviewer does
+    // not keep them under a role whose permissions differ.
+    if (m.role === "reviewer" && role !== "reviewer") await removeSharesFor(tx, ctx.orgId, m.userId);
+  });
 
   const meta = await requestMeta();
   await audit({
@@ -149,6 +184,8 @@ export async function removeMember(formData: FormData): Promise<ActionResult> {
       .update(apiKeys)
       .set({ revokedAt: new Date() })
       .where(and(eq(apiKeys.orgId, ctx.orgId), eq(apiKeys.userId, m.userId), isNull(apiKeys.revokedAt)));
+    await revokeInvitationsSentBy(tx, ctx.orgId, m.userId);
+    await removeSharesFor(tx, ctx.orgId, m.userId);
   });
 
   const meta = await requestMeta();

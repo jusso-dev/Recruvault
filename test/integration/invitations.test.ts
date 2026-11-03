@@ -61,8 +61,8 @@ async function verifiedUser(email: string) {
   return browser;
 }
 
-function accept(browser: Browser, token: string) {
-  return asBrowser(browser, () => actions.acceptInvitation(form({ token })));
+function accept(browser: Browser, token: string, password = PASSWORD) {
+  return asBrowser(browser, () => actions.acceptInvitation(form({ token, password })));
 }
 
 async function userRow(email: string) {
@@ -299,5 +299,77 @@ describe("application withdrawal", () => {
 
     // Already withdrawn: nothing left to withdraw.
     expect((await asBrowser(applicant, () => withdrawApplication(form({ submissionId })))).ok).toBe(false);
+  });
+});
+
+describe("invitation hardening", () => {
+  it("needs the account password and signs out every other session", async () => {
+    const sent = await invite("pre-registered@example.invalid");
+    // Someone else may have registered this address first and kept a session.
+    const squatter = await verifiedUser("pre-registered@example.invalid");
+    const invitee = newBrowser();
+    const signIn = await authRequest(invitee, "/sign-in/email", {
+      body: { email: "pre-registered@example.invalid", password: PASSWORD },
+    });
+    expect(signIn.status).toBe(200);
+
+    expect(await accept(invitee, sent.token, "")).toMatchObject({ ok: false, error: expect.stringMatching(/password/) });
+    expect(await accept(invitee, sent.token, "not-the-password")).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/not correct/),
+    });
+    expect(await accept(invitee, sent.token)).toEqual({ ok: true });
+
+    const { getSession } = await import("@/lib/guards");
+    expect(await asBrowser(squatter, () => getSession())).toBeNull();
+    expect(await asBrowser(invitee, () => getSession())).not.toBeNull();
+  });
+
+  it("ends with the sender's authority", async () => {
+    const { removeMember, updateMemberRole } = await import("@/actions/org");
+    const { unlockVault } = await import("@/actions/vault");
+    const adminInvite = await invite("inviting-admin@example.invalid", "admin");
+    const admin = await verifiedUser("inviting-admin@example.invalid");
+    expect(await accept(admin, adminInvite.token)).toEqual({ ok: true });
+    expect((await asBrowser(admin, () => unlockVault(form({ encryptionKey: ORG_KEY })))).ok).toBe(true);
+    const adminId = (await userRow("inviting-admin@example.invalid")).id;
+    const [adminMembership] = await db.select().from(memberships).where(eq(memberships.userId, adminId));
+
+    const sendAs = async (email: string) => {
+      const result = await asBrowser(admin, () => actions.inviteMember(form({ email, role: "admin" })));
+      expect(result.ok, result.error).toBe(true);
+      const sent: string[] = [];
+      await invitations.sendInvitationEmail(result.id!, async (message) => {
+        sent.push(message.link);
+        return "message-id";
+      });
+      return { id: result.id!, token: new URL(sent[0]).pathname.replace(/^\/invite\//, "") };
+    };
+
+    // Demoted: invitations the admin sent are revoked.
+    const beforeDemotion = await sendAs("demoted-admin-guest@example.invalid");
+    expect(
+      (await asBrowser(owner, () =>
+        updateMemberRole(form({ membershipId: adminMembership.id, role: "recruiter" })),
+      )).ok,
+    ).toBe(true);
+    const [revoked] = await db.select().from(orgInvitations).where(eq(orgInvitations.id, beforeDemotion.id));
+    expect(revoked.revokedAt).not.toBeNull();
+
+    // An invitation whose sender no longer manages users cannot be accepted,
+    // even if it was somehow left open.
+    await db.update(orgInvitations).set({ revokedAt: null }).where(eq(orgInvitations.id, beforeDemotion.id));
+    const guest = await verifiedUser("demoted-admin-guest@example.invalid");
+    expect(await accept(guest, beforeDemotion.token)).toMatchObject({ ok: false });
+    expect(await db.select().from(memberships).where(eq(memberships.userId, (await userRow("demoted-admin-guest@example.invalid")).id))).toHaveLength(0);
+
+    // Removed: the same applies.
+    expect(
+      (await asBrowser(owner, () => updateMemberRole(form({ membershipId: adminMembership.id, role: "admin" })))).ok,
+    ).toBe(true);
+    const beforeRemoval = await sendAs("removed-admin-guest@example.invalid");
+    expect((await asBrowser(owner, () => removeMember(form({ membershipId: adminMembership.id })))).ok).toBe(true);
+    const [afterRemoval] = await db.select().from(orgInvitations).where(eq(orgInvitations.id, beforeRemoval.id));
+    expect(afterRemoval.revokedAt).not.toBeNull();
   });
 });

@@ -1,10 +1,10 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { memberships } from "@/db/schema";
+import { account, memberships } from "@/db/schema";
 import { acceptInvitation } from "@/actions/invitations";
 import { ActionForm } from "@/components/action-form";
 import { SignOutButton } from "@/components/sign-out";
-import { Button, ButtonLink, Card, CardContent } from "@/components/ui";
+import { Button, ButtonLink, Card, CardContent, Input, Label } from "@/components/ui";
 import { VerifyEmailPanel } from "@/components/verify-email-panel";
 import { getSession, requestMeta } from "@/lib/guards";
 import {
@@ -142,6 +142,14 @@ export default async function InvitationPage({ params }: { params: Promise<{ tok
     );
   }
 
+  // Accepting re-checks the password, so an address someone else registered
+  // first cannot join with their credentials (see acceptInvitation).
+  const [credential] = await db
+    .select({ id: account.id })
+    .from(account)
+    .where(and(eq(account.userId, session.user.id), eq(account.providerId, "credential")));
+  const hasPassword = Boolean(credential);
+
   return (
     <Shell>
       {heading}
@@ -151,6 +159,12 @@ export default async function InvitationPage({ params }: { params: Promise<{ tok
       </p>
       <ActionForm action={acceptInvitation} redirectTo="/dashboard" className="space-y-3">
         <input type="hidden" name="token" value={token} />
+        {hasPassword && (
+          <div>
+            <Label htmlFor="password">Your account password</Label>
+            <Input id="password" name="password" type="password" autoComplete="current-password" required />
+          </div>
+        )}
         <Button type="submit" className="w-full">
           Accept and join {orgName}
         </Button>

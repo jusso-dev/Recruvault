@@ -324,6 +324,8 @@ test("creates recruiter, reviewer, and job-seeker accounts through the UI", asyn
     await reviewerContext.clearCookies();
     await reviewerPage.goto(verification.ctaUrl!);
     await reviewerPage.waitForURL("**/invite/**");
+    // Accepting re-checks the account password.
+    await reviewerPage.getByLabel("Your account password").fill(accounts.reviewer.password);
     await reviewerPage.getByRole("button", { name: `Accept and join ${organisationName}` }).click();
     await reviewerPage.waitForURL("**/vault/unlock**");
     await unlockIfNeeded(reviewerPage, vaultKeys.get(accounts.owner.email) ?? "");

@@ -1,10 +1,12 @@
 "use server";
 
 import { randomUUID } from "crypto";
-import { and, eq, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, isNull, lte, ne, sql } from "drizzle-orm";
+import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { candidateAccounts, memberships, orgInvitations, user } from "@/db/schema";
+import { account, candidateAccounts, memberships, orgInvitations, session as sessions, user } from "@/db/schema";
+import { auth } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { getSession, requestMeta, requireEnrolledOrg, requireUnlockedOrg } from "@/lib/guards";
 import {
@@ -16,7 +18,7 @@ import {
 import { invitationLinkToken } from "@/lib/link-token";
 import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { ASSIGNABLE_ROLES, type OrgRole } from "@/lib/rbac";
+import { ASSIGNABLE_ROLES, can, type OrgRole } from "@/lib/rbac";
 import type { ActionResult } from "./org";
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -157,6 +159,23 @@ export async function acceptInvitation(formData: FormData): Promise<ActionResult
 
   const userId = session.user.id;
   const invitationId = found.invitation.id;
+
+  // A password set before this address was proven may belong to someone who
+  // pre-registered it. Accepting therefore needs that password: a person who
+  // only controls the inbox resets it first, which revokes the other sessions.
+  const [credential] = await db
+    .select({ id: account.id })
+    .from(account)
+    .where(and(eq(account.userId, userId), eq(account.providerId, "credential")));
+  if (credential) {
+    const password = String(formData.get("password") ?? "");
+    if (!password) return { ok: false, error: "Enter your account password to accept." };
+    try {
+      await auth.api.verifyPassword({ body: { password }, headers: await headers() });
+    } catch {
+      return { ok: false, error: "That password is not correct." };
+    }
+  }
   type Outcome = { ok: true; orgId: string } | { ok: false; error: string };
   const outcome: Outcome = await db.transaction(async (tx) => {
     const [invitation] = await tx
@@ -166,6 +185,22 @@ export async function acceptInvitation(formData: FormData): Promise<ActionResult
       .for("update");
     const current = invitation ? invitationState(invitation) : "revoked";
     if (current !== "open") return { ok: false, error: CLOSED_MESSAGES[current] };
+
+    // Serialise accepts and organisation creation for this account, so it can
+    // never end up in two organisations.
+    await tx.select({ id: user.id }).from(user).where(eq(user.id, userId)).for("update");
+
+    // An invitation carries its sender's authority, which ends when they leave
+    // the organisation or lose user management.
+    const [inviter] = invitation.invitedBy
+      ? await tx
+          .select({ role: memberships.role })
+          .from(memberships)
+          .where(and(eq(memberships.orgId, invitation.orgId), eq(memberships.userId, invitation.invitedBy)))
+      : [];
+    if (!inviter || !can(inviter.role, "users:manage")) {
+      return { ok: false, error: CLOSED_MESSAGES.revoked };
+    }
 
     const [existing] = await tx
       .select({ id: memberships.id })
@@ -190,6 +225,8 @@ export async function acceptInvitation(formData: FormData): Promise<ActionResult
       .update(orgInvitations)
       .set({ acceptedAt: new Date(), acceptedBy: userId })
       .where(eq(orgInvitations.id, invitationId));
+    // Only this session joins the organisation; every other one signs in again.
+    await tx.delete(sessions).where(and(eq(sessions.userId, userId), ne(sessions.id, session.session.id)));
     return { ok: true, orgId: invitation.orgId };
   });
   if (!outcome.ok) return outcome;
