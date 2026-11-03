@@ -75,7 +75,8 @@ const schema = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [path] });
     if (val.SCAN_DISABLED === "true") fail("SCAN_DISABLED", "SCAN_DISABLED must not be true in production.");
     if (val.PLAYWRIGHT_TEST === "1") fail("PLAYWRIGHT_TEST", "PLAYWRIGHT_TEST must not be enabled in production.");
-    if (!val.BOOTSTRAP_TOKEN || val.BOOTSTRAP_TOKEN.length < 32) {
+    // Optional: without it /setup refuses every claim. Remove it once setup is done.
+    if (val.BOOTSTRAP_TOKEN && val.BOOTSTRAP_TOKEN.length < 32) {
       fail("BOOTSTRAP_TOKEN", "BOOTSTRAP_TOKEN must be at least 32 characters in production.");
     }
     if (val.INNGEST_DEV) fail("INNGEST_DEV", "INNGEST_DEV must not be set in production.");

@@ -47,6 +47,7 @@ const AUDITED_SCOPES = new Set<ApiScope>([
   "jd:write",
   "invitations:send",
   "submissions:read",
+  "submissions:write",
   "profile:write",
   "match:read",
 ]);

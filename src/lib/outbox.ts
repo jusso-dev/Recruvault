@@ -202,6 +202,13 @@ export interface OutboxStats {
   oldestPendingSeconds: number;
 }
 
+/** A pending row older than this, or any dead row, means jobs are not draining. */
+export const OUTBOX_STALE_SECONDS = 900;
+
+export function outboxNeedsAttention(stats: Pick<OutboxStats, "dead" | "oldestPendingSeconds">): boolean {
+  return stats.dead > 0 || stats.oldestPendingSeconds > OUTBOX_STALE_SECONDS;
+}
+
 export async function outboxStats(): Promise<OutboxStats> {
   const [row] = await db
     .select({

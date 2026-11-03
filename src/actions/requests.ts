@@ -13,13 +13,14 @@ import {
   requests,
   requestTemplates,
   submissionShares,
-  submissions,
   suppressions,
 } from "@/db/schema";
-import { requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "@/lib/guards";
+import { AuthError, requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "@/lib/guards";
+import { assertSubmissionAccess, canManageRequest } from "@/lib/review";
 import { audit } from "@/lib/audit";
 import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
-import { queueRequestDelivery } from "@/lib/requests-service";
+import { queueRequestDelivery, setRequestStatusCore } from "@/lib/requests-service";
+import { ApiError } from "@/lib/api/http";
 import { activeVault } from "@/lib/vault-store";
 import { readUnlockedCustomerKey } from "@/lib/vault-session";
 import { discardProtectedUploads, protectDocument, putProtectedObject } from "@/lib/document-protect";
@@ -107,69 +108,90 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
     return { ok: false, error: "Select at least one field to request." };
   }
 
-  // Optional JD upload, stored encrypted and scanned before it can be viewed.
-  let jdDocumentId: string | null = null;
-  let jdUpload:
-    | { storageKey: string; ciphertext: Buffer; dekId: string; row: typeof documents.$inferInsert & { id: string } }
-    | undefined;
-  const jd = formData.get("jd");
-  if (jd instanceof File && jd.size > 0) {
-    if (jd.size > UPLOAD_MAX_BYTES) return { ok: false, error: "JD exceeds 15 MB." };
-    const bytes = Buffer.from(await jd.arrayBuffer());
+  const ndaViewMode =
+    formData.get("ndaViewMode") === "allow_download" ? "allow_download" : "view_only";
+
+  // Optional JD and NDA uploads, stored encrypted and scanned before they can
+  // be viewed. Both files are validated before either is encrypted, so a
+  // rejected NDA cannot leave an orphaned JD key behind.
+  type PreparedUpload = {
+    storageKey: string;
+    ciphertext: Buffer;
+    dekId: string;
+    row: typeof documents.$inferInsert & { id: string };
+  };
+  const files: { kind: "jd" | "nda"; label: string; file: File; bytes: Buffer; sniffed: string }[] = [];
+  for (const [kind, label] of [["jd", "JD"], ["nda", "NDA"]] as const) {
+    const file = formData.get(kind);
+    if (!(file instanceof File) || file.size === 0) continue;
+    if (file.size > UPLOAD_MAX_BYTES) return { ok: false, error: `${label} exceeds 15 MB.` };
+    const bytes = Buffer.from(await file.arrayBuffer());
     const sniffed = sniffContentType(bytes);
     if (!sniffed || !JD_ALLOWED_TYPES.includes(sniffed)) {
-      return { ok: false, error: "The JD must be a PDF or Word (.docx) document." };
+      return { ok: false, error: `The ${label} must be a PDF or Word (.docx) document.` };
     }
+    files.push({ kind, label, file, bytes, sniffed });
+  }
+  const uploads: PreparedUpload[] = [];
+  let jdDocumentId: string | null = null;
+  let ndaDocumentId: string | null = null;
+  if (files.length > 0) {
     const crk = await readUnlockedCustomerKey("organisation", ctx.orgId);
     const vault = await activeVault("organisation", ctx.orgId);
     if (!crk || !vault) return { ok: false, error: "Unlock the organisation encryption key before uploading." };
-    const prepared = await protectDocument({
-      executor: db,
-      bytes,
-      ownerType: "organisation",
-      ownerId: ctx.orgId,
-      purpose: "jd",
-      keyVersion: vault.version,
-      crk,
-      scope: "org",
-    });
-    if (!prepared.ok) return prepared;
-    jdUpload = {
-      storageKey: prepared.storageKey,
-      ciphertext: prepared.ciphertext,
-      dekId: prepared.dekId,
-      row: {
-        id: prepared.documentId,
-        orgId: ctx.orgId,
-        kind: "jd",
-        fileName: jd.name,
-        contentType: "application/octet-stream",
-        originalContentType: sniffed,
-        sizeBytes: jd.size,
+    for (const { kind, file, bytes, sniffed } of files) {
+      const prepared = await protectDocument({
+        executor: db,
+        bytes,
+        ownerType: "organisation",
+        ownerId: ctx.orgId,
+        purpose: kind,
+        keyVersion: vault.version,
+        crk,
+        scope: "org",
+      });
+      if (!prepared.ok) {
+        await discardProtectedUploads(uploads, ctx.orgId);
+        return prepared;
+      }
+      uploads.push({
         storageKey: prepared.storageKey,
-        checksum: createHash("sha256").update(bytes).digest("hex"),
+        ciphertext: prepared.ciphertext,
         dekId: prepared.dekId,
-        envelopeVersion: prepared.envelopeVersion,
-        scanStatus: "clean",
-      },
-    };
-    jdDocumentId = prepared.documentId;
+        row: {
+          id: prepared.documentId,
+          orgId: ctx.orgId,
+          kind,
+          fileName: file.name,
+          contentType: "application/octet-stream",
+          originalContentType: sniffed,
+          sizeBytes: file.size,
+          storageKey: prepared.storageKey,
+          checksum: createHash("sha256").update(bytes).digest("hex"),
+          dekId: prepared.dekId,
+          envelopeVersion: prepared.envelopeVersion,
+          scanStatus: "clean",
+        },
+      });
+      if (kind === "jd") jdDocumentId = prepared.documentId;
+      else ndaDocumentId = prepared.documentId;
+    }
   }
 
-  // The JD document, the request that points at it, and their events commit
-  // together. If the upload or the transaction fails, the JD's key is shredded
-  // and its object queued for durable deletion.
+  // The JD/NDA documents, the request that points at them, and their events
+  // commit together. If an upload or the transaction fails, their keys are
+  // shredded and their objects queued for durable deletion.
   let request: { id: string };
   try {
-    if (jdUpload) await putProtectedObject(jdUpload.storageKey, jdUpload.ciphertext);
+    for (const upload of uploads) await putProtectedObject(upload.storageKey, upload.ciphertext);
     request = await db.transaction(async (tx) => {
-      if (jdUpload) {
-        await tx.insert(documents).values(jdUpload.row);
+      for (const upload of uploads) {
+        await tx.insert(documents).values(upload.row);
         await enqueueEvent(
           tx,
           "document/uploaded",
-          { documentId: jdUpload.row.id, table: "documents" },
-          `document/uploaded:documents:${jdUpload.row.id}`,
+          { documentId: upload.row.id, table: "documents" },
+          `document/uploaded:documents:${upload.row.id}`,
           ctx.orgId,
         );
       }
@@ -194,6 +216,8 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
           consentPurpose,
           jdDocumentId,
           jdViewMode,
+          ndaDocumentId,
+          ndaViewMode,
         })
         .returning({ id: requests.id });
 
@@ -246,12 +270,7 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
       return inserted;
     });
   } catch (err) {
-    if (jdUpload) {
-      await discardProtectedUploads(
-        [{ storageKey: jdUpload.storageKey, dekId: jdUpload.dekId }],
-        ctx.orgId,
-      );
-    }
+    await discardProtectedUploads(uploads, ctx.orgId);
     throw err;
   }
 
@@ -313,7 +332,7 @@ export async function sendRequest(formData: FormData): Promise<ActionResult> {
     .select()
     .from(requests)
     .where(and(eq(requests.id, requestId), eq(requests.orgId, ctx.orgId)));
-  if (!request) return { ok: false, error: "Request not found." };
+  if (!request || !canManageRequest(ctx, request)) return { ok: false, error: "Request not found." };
   if (request.status !== "open" && request.status !== "closing_soon") {
     return { ok: false, error: "Only open requests can be sent." };
   }
@@ -352,11 +371,17 @@ export async function revokeAccessToken(formData: FormData): Promise<ActionResul
   const accessTokenId = String(formData.get("accessTokenId") ?? "");
 
   const [row] = await db
-    .select({ id: accessTokens.id, consumedAt: accessTokens.consumedAt, revokedAt: accessTokens.revokedAt, requestId: accessTokens.requestId })
+    .select({
+      id: accessTokens.id,
+      consumedAt: accessTokens.consumedAt,
+      revokedAt: accessTokens.revokedAt,
+      requestId: accessTokens.requestId,
+      createdBy: requests.createdBy,
+    })
     .from(accessTokens)
     .innerJoin(requests, eq(requests.id, accessTokens.requestId))
     .where(and(eq(accessTokens.id, accessTokenId), eq(requests.orgId, ctx.orgId)));
-  if (!row) return { ok: false, error: "Link not found." };
+  if (!row || !canManageRequest(ctx, row)) return { ok: false, error: "Link not found." };
   if (row.consumedAt) return { ok: false, error: "This link has already been completed." };
   if (row.revokedAt) return { ok: false, error: "This link is already revoked." };
 
@@ -387,36 +412,12 @@ export async function revokeAccessToken(formData: FormData): Promise<ActionResul
 export async function setRequestStatus(formData: FormData): Promise<ActionResult> {
   const ctx = await requireUnlockedOrg("requests:create");
   const requestId = String(formData.get("requestId") ?? "");
-  const status = String(formData.get("status") ?? "");
-  if (!["open", "closing_soon", "closed", "archived"].includes(status)) {
-    return { ok: false, error: "Invalid status." };
+  try {
+    await setRequestStatusCore(ctx, requestId, String(formData.get("status") ?? ""), await requestMeta());
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    throw err;
   }
-
-  const [request] = await db
-    .select()
-    .from(requests)
-    .where(and(eq(requests.id, requestId), eq(requests.orgId, ctx.orgId)));
-  if (!request) return { ok: false, error: "Request not found." };
-
-  await db
-    .update(requests)
-    .set({
-      status: status as "open" | "closing_soon" | "closed" | "archived",
-      closedAt: status === "closed" ? new Date() : request.closedAt,
-    })
-    .where(eq(requests.id, requestId));
-
-  const meta = await requestMeta();
-  await audit({
-    orgId: ctx.orgId,
-    actorType: "org_user",
-    actorId: ctx.userId,
-    action: `request.status.${status}`,
-    targetType: "request",
-    targetId: requestId,
-    ...meta,
-  });
-
   revalidatePath(`/dashboard/requests/${requestId}`);
   return { ok: true };
 }
@@ -427,18 +428,24 @@ export async function shareSubmission(formData: FormData): Promise<ActionResult>
   const submissionId = String(formData.get("submissionId") ?? "");
   const userId = String(formData.get("userId") ?? "");
 
-  const [sub] = await db
-    .select({ id: submissions.id, orgId: requests.orgId })
-    .from(submissions)
-    .innerJoin(requests, eq(requests.id, submissions.requestId))
-    .where(and(eq(submissions.id, submissionId), eq(requests.orgId, ctx.orgId)));
-  if (!sub) return { ok: false, error: "Submission not found." };
+  // The caller must be able to review the submission themselves: sharing is
+  // never a way to grant access the caller does not hold.
+  try {
+    await assertSubmissionAccess(ctx, submissionId);
+  } catch (err) {
+    if (err instanceof AuthError) return { ok: false, error: err.message };
+    throw err;
+  }
+  if (userId === ctx.userId) return { ok: false, error: "Choose a reviewer other than yourself." };
 
   const [member] = await db
     .select()
     .from(memberships)
     .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.userId, userId)));
   if (!member) return { ok: false, error: "That user is not a member of your organisation." };
+  // Shares grant the reviewer role's shared-only read. Other roles already
+  // have their own access rules, so a share must not widen them.
+  if (member.role !== "reviewer") return { ok: false, error: "Submissions can only be shared with reviewers." };
 
   await db
     .insert(submissionShares)

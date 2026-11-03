@@ -115,6 +115,12 @@ export function AppShell({
 
   return (
     <div className="min-h-screen bg-background lg:grid lg:grid-cols-[248px_minmax(0,1fr)]">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-stone-900 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-stone-50 focus:outline-2 focus:outline-offset-2 focus:outline-accent"
+      >
+        Skip to content
+      </a>
       <aside className="sticky top-0 hidden h-screen flex-col border-r border-stone-200 bg-stone-100/65 lg:flex">
         <div className="border-b border-stone-200 px-5 py-5">
           <Link
@@ -165,7 +171,11 @@ export function AppShell({
           <div className="overflow-x-auto px-3 pb-2">{navigation}</div>
         </header>
 
-        <main className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 sm:py-8 xl:px-10">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="mx-auto w-full max-w-[1440px] px-4 py-6 focus:outline-none sm:px-6 sm:py-8 xl:px-10"
+        >
           {children}
         </main>
       </div>

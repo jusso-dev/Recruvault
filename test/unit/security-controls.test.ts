@@ -112,4 +112,10 @@ describe("production environment", () => {
     expect(parseEnv({ ...base, INNGEST_EVENT_KEY: undefined }).success).toBe(false);
     expect(parseEnv({ ...base, APP_URL: "http://vault.example.org" }).success).toBe(false);
   });
+
+  it("treats BOOTSTRAP_TOKEN as optional once setup is done, but checks it when set", () => {
+    expect(parseEnv({ ...base, BOOTSTRAP_TOKEN: undefined }).success).toBe(true);
+    expect(parseEnv({ ...base, BOOTSTRAP_TOKEN: "" }).success).toBe(true);
+    expect(parseEnv({ ...base, BOOTSTRAP_TOKEN: "c4e6a8f0b2d41673" }).success).toBe(false);
+  });
 });

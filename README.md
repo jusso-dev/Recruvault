@@ -108,14 +108,14 @@ This is a passion project: public, MIT-licensed, and self-hostable by anyone. Is
 
 ## Features
 
-- **Organisations, users, and RBAC** — Owner / Admin / Recruiter / Reviewer / Compliance roles, enforced in the data layer (tenant + ownership checks on every read), never just the UI (`src/lib/rbac.ts`, `src/lib/guards.ts`).
-- **Job seeker application workspace** — track drafts and submitted applications through shortlist, interview, offer, and placement. Save relevant roles and see the current stage without searching through email.
+- **Organisations, users, and RBAC** — Owner / Admin / Recruiter / Reviewer / Compliance roles, enforced in the data layer (tenant + ownership checks on every read), never just the UI (`src/lib/rbac.ts`, `src/lib/guards.ts`). Owners and admins add teammates by emailed invitation (single use, 7-day expiry, revocable); the invitee joins with a verified matching address and then unlocks with the organisation encryption key. Reviewers see applications shared with them on their dashboard, and the role owner or an admin can remove that access.
+- **Job seeker application workspace** — track drafts and submitted applications through shortlist, interview, offer, and placement. Save relevant roles, see the current stage without searching through email, and withdraw an active application.
 - **Career documents and credentials** — keep current resumes, cover letters, and reusable clearance details together, with field-level encryption, a consent ledger, and per-share revocation. Identity documents, right-to-work evidence, and police-check documents are intentionally excluded.
 - **Recruiter placement pipeline** — manage active roles and move each candidate through review, shortlist, interview, offer, and placement with a clear action queue and audited status history.
 - **Dual-consent matched role alerts** — recruiters opt in at organisation level and choose a minimum skill-match threshold; job seekers independently subscribe with skills, locations, employment types, work arrangements, and salary/rate preferences. Only open, listed roles generate deduplicated emails, and matching never exposes job-seeker identity, profile data, or documents to recruiters.
 - **Favourite / saved roles** — seekers see roles sent to them, roles they responded to, and roles listed by orgs they've engaged with. Never a public job board.
 - **REST API and MCP** — role-aware developer access for recruiters and job seekers, including copyable setup and reporting prompts. The recruiter report covers outstanding information, previous-month applications, unfilled roles, stage aging, stalled candidates, application velocity, deadlines, weekly priorities, and matched-alert performance. Job-seeker keys remain limited to their owner-scoped applications, career-document metadata, and safe discovery profile.
-- **Secure requests** — JD attachment (privately stored, virus-scanned, and served with a per-view watermark burned into the PDF), field library seeded with current AGSVA clearance levels (configurable — the PV → TS-PA transition is live), delivery + expiry settings, consent gate.
+- **Secure requests** — JD and optional NDA attachments (privately stored, virus-scanned, and served with a per-view watermark burned into the PDF; responders must accept the NDA before submitting), field library seeded with current AGSVA clearance levels (configurable — the PV → TS-PA transition is live), delivery + expiry settings, consent gate.
 - **Delivery** — opaque single-purpose expiring links by email (Resend) and SMS (AWS SNS), sent through Inngest with retries. Recruiters see sent / opened / started / submitted without seeing data before submission.
 - **Job seeker flow** — mobile-first: OTP step-up (defends forwarded links), versioned consent with IP + timestamp, watermarked JD view (viewer identity + timestamp burned into every page for traceability), wallet pre-fill, controlled uploads (type/size limits, content sniffing, ClamAV before visibility).
 - **Review and export** — in-browser rendering through authorised audited routes (no public URLs), submission statuses, CSV/JSON export of decrypted structured data as a logged, role-gated action.
@@ -127,7 +127,7 @@ This is a passion project: public, MIT-licensed, and self-hostable by anyone. Is
 
 Next.js 16.4 (App Router) · React 19.3 · TypeScript · Tailwind · BetterAuth · PostgreSQL + Drizzle · Inngest · Resend · AWS S3/SNS (or MinIO) · ClamAV · Docker Compose.
 
-Interactive API documentation is available at `/api/v1/docs`, with the OpenAPI 3.1 document at `/api/v1/openapi.json`. Signed-in users can create scoped keys, copy MCP configuration, or copy a ready-to-use coding-agent setup prompt from **API & MCP** in their workspace navigation.
+An API reference is available at `/api/v1/docs` (a script-free page that cannot be framed), with the OpenAPI 3.1 document at `/api/v1/openapi.json`. Browser clients on another origin need that origin in `API_CORS_ORIGINS`; see [Browser security policy](docs/operations.md#browser-security-policy). Signed-in users can create scoped keys, copy MCP configuration, or copy a ready-to-use coding-agent setup prompt from **API & MCP** in their workspace navigation.
 
 ## Local development
 
@@ -148,7 +148,7 @@ npx inngest-cli@latest dev -u http://localhost:3000/api/inngest   # background j
 
 Open `http://localhost:3000`. A fresh installation redirects to `/setup`, where the first recruiter creates the owner account and organisation. Once an organisation exists, `/setup` redirects to sign-in.
 
-Recruiter self-registration is controlled by `ALLOW_RECRUITER_SIGNUP`. The local `.env.example` sets it to `true` so the recruiter flow can be tested. Set it to `false` in production after the first owner uses `/setup`; job seekers can continue registering from `/sign-up`. The API enforces this setting as well as the visible form.
+Recruiter self-registration is controlled by `ALLOW_RECRUITER_SIGNUP`. The local `.env.example` sets it to `true` so the recruiter flow can be tested. Set it to `false` in production after the first owner uses `/setup`; job seekers can continue registering from `/sign-up`. The API enforces this setting as well as the visible form. Teammates join through invitations from **Settings → Users and roles**, which work with self-registration closed. An invitation cannot convert a job-seeker account that already holds applications, documents, or an encryption key.
 
 For screenshot-ready local data, first create one recruiter and one job-seeker account through the UI, then run:
 

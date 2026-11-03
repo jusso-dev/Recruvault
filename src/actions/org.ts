@@ -1,13 +1,13 @@
 "use server";
 
 import { createHash } from "crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { apiKeys, memberships, organisations, user } from "@/db/schema";
+import { apiKeys, memberships, organisations, orgInvitations, requests, submissions, submissionShares } from "@/db/schema";
 import { getSession, requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "@/lib/guards";
 import { audit } from "@/lib/audit";
-import { ASSIGNABLE_ROLES, type OrgRole } from "@/lib/rbac";
+import { ASSIGNABLE_ROLES, can, type OrgRole } from "@/lib/rbac";
 import {
   createSendingDomain,
   getSendingDomain,
@@ -100,53 +100,33 @@ export async function createOrganisation(formData: FormData): Promise<ActionResu
   return { ok: true, id: org.id };
 }
 
-/** Add an existing org-side user to the organisation with a role. */
-export async function addMember(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireUnlockedOrg("users:manage");
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const role = String(formData.get("role") ?? "") as OrgRole;
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-  if (!email) return { ok: false, error: "Email is required." };
-  if (!ASSIGNABLE_ROLES.includes(role)) return { ok: false, error: "Invalid role." };
+/** Open invitations carry their sender's authority, so they end with it. */
+async function revokeInvitationsSentBy(tx: Tx, orgId: string, userId: string) {
+  await tx
+    .update(orgInvitations)
+    .set({ revokedAt: new Date() })
+    .where(
+      and(
+        eq(orgInvitations.orgId, orgId),
+        eq(orgInvitations.invitedBy, userId),
+        isNull(orgInvitations.acceptedAt),
+        isNull(orgInvitations.revokedAt),
+      ),
+    );
+}
 
-  const [u] = await db.select().from(user).where(eq(user.email, email));
-  if (!u) {
-    return {
-      ok: false,
-      error: "No account with that email. Ask them to sign up as an organisation user first.",
-    };
-  }
-  if ((u as { accountType?: string }).accountType !== "org") {
-    return { ok: false, error: "That account is a job seeker account, not an organisation user." };
-  }
-
-  // Single-org invariant: a user belongs to exactly one organisation. This
-  // keeps tenant resolution unambiguous (see requireOrgUser).
-  const [existingMembership] = await db
-    .select({ orgId: memberships.orgId })
-    .from(memberships)
-    .where(eq(memberships.userId, u.id));
-  if (existingMembership) {
-    return existingMembership.orgId === ctx.orgId
-      ? { ok: false, error: "Already a member." }
-      : { ok: false, error: "That account already belongs to another organisation." };
-  }
-
-  await db.insert(memberships).values({ orgId: ctx.orgId, userId: u.id, role });
-
-  const meta = await requestMeta();
-  await audit({
-    orgId: ctx.orgId,
-    actorType: "org_user",
-    actorId: ctx.userId,
-    action: "membership.added",
-    targetType: "user",
-    targetId: u.id,
-    ...meta,
-  });
-
-  revalidatePath("/dashboard/settings");
-  return { ok: true };
+/** Drop a member's submission shares within this organisation. */
+async function removeSharesFor(tx: Tx, orgId: string, userId: string) {
+  const orgSubmissions = tx
+    .select({ id: submissions.id })
+    .from(submissions)
+    .innerJoin(requests, eq(requests.id, submissions.requestId))
+    .where(eq(requests.orgId, orgId));
+  await tx
+    .delete(submissionShares)
+    .where(and(eq(submissionShares.userId, userId), inArray(submissionShares.submissionId, orgSubmissions)));
 }
 
 export async function updateMemberRole(formData: FormData): Promise<ActionResult> {
@@ -162,7 +142,13 @@ export async function updateMemberRole(formData: FormData): Promise<ActionResult
   if (!m) return { ok: false, error: "Membership not found." };
   if (m.role === "owner") return { ok: false, error: "The owner role cannot be changed here." };
 
-  await db.update(memberships).set({ role }).where(eq(memberships.id, membershipId));
+  await db.transaction(async (tx) => {
+    await tx.update(memberships).set({ role }).where(eq(memberships.id, membershipId));
+    if (!can(role, "users:manage")) await revokeInvitationsSentBy(tx, ctx.orgId, m.userId);
+    // Shares grant reviewer access; a member who stops being a reviewer does
+    // not keep them under a role whose permissions differ.
+    if (m.role === "reviewer" && role !== "reviewer") await removeSharesFor(tx, ctx.orgId, m.userId);
+  });
 
   const meta = await requestMeta();
   await audit({
@@ -198,6 +184,8 @@ export async function removeMember(formData: FormData): Promise<ActionResult> {
       .update(apiKeys)
       .set({ revokedAt: new Date() })
       .where(and(eq(apiKeys.orgId, ctx.orgId), eq(apiKeys.userId, m.userId), isNull(apiKeys.revokedAt)));
+    await revokeInvitationsSentBy(tx, ctx.orgId, m.userId);
+    await removeSharesFor(tx, ctx.orgId, m.userId);
   });
 
   const meta = await requestMeta();

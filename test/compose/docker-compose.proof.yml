@@ -1,0 +1,96 @@
+# TEST ONLY. Install proof overlay for the production stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     -f test/compose/docker-compose.proof.yml ...
+#
+# Run it through scripts/compose-proof.sh, which generates every secret. The
+# app image and its production settings are unchanged. This file only adds:
+#   - tls-proxy: Caddy with a throwaway internal CA, so APP_URL is https and
+#     cookies, origins, and HSTS behave as they do behind a real proxy.
+#   - mock-resend: a stand-in for the Resend API. The app sends real API calls
+#     to it (RESEND_BASE_URL) and the driver reads the verification link there.
+#   - inngest-server: self-hosted Inngest in production mode (`inngest start`)
+#     with the same event and signing keys the app requires.
+#   - proof-driver: headless Chromium that walks setup as a person would.
+# None of these are published on the host. Only the app port is. Paths are
+# relative to the repository root (the first Compose file).
+
+networks:
+  default:
+    # Explicit so hosts whose default address pools are exhausted still work.
+    ipam:
+      config:
+        - subnet: ${PROOF_SUBNET:-10.200.15.0/24}
+
+services:
+  app:
+    ports: !override
+      - "127.0.0.1:${PROOF_APP_PORT:-3130}:3000"
+    environment:
+      RESEND_BASE_URL: http://mock-resend:8025
+      INNGEST_BASE_URL: http://inngest-server:8288
+    depends_on:
+      mock-resend:
+        condition: service_started
+
+  mock-resend:
+    build: ./test/compose/mock-resend
+    environment:
+      MOCK_RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+  inngest-server:
+    image: inngest/inngest:v1.46.0@sha256:9c4a2413bdbfa31a94ff54c32ae2dcc6613dbee84bc76db6cf6644d19e357e3e
+    command: ["inngest", "start", "--sdk-url", "http://app:3000/api/inngest", "--no-ui"]
+    environment:
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?set INNGEST_EVENT_KEY}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?set INNGEST_SIGNING_KEY}
+    depends_on:
+      app:
+        condition: service_healthy
+
+  tls-proxy:
+    image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    # Caddy keeps its CA under 0700 directories. Publish only the public root
+    # certificate, world-readable, so the driver can run as a non-root user.
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        caddy reverse-proxy --from "${PROOF_HOST:-rv-proof.test}" --to app:3000 --internal-certs --disable-redirects &
+        pid=$$!
+        root=/data/caddy/pki/authorities/local/root.crt
+        until [ -s "$$root" ]; do kill -0 "$$pid"; sleep 1; done
+        install -m 0644 "$$root" /ca/root.crt
+        wait "$$pid"
+    volumes:
+      - caddy-data:/data
+      - proof-ca:/ca
+    networks:
+      default:
+        aliases:
+          - ${PROOF_HOST:-rv-proof.test}
+    depends_on:
+      app:
+        condition: service_started
+
+  proof-driver:
+    build: ./test/compose/driver
+    profiles: ["proof"]
+    environment:
+      APP_URL: ${APP_URL:?set APP_URL}
+      MOCK_RESEND_URL: http://mock-resend:8025
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?set BOOTSTRAP_TOKEN}
+      PROOF_OWNER_EMAIL: ${PROOF_OWNER_EMAIL:?set PROOF_OWNER_EMAIL}
+      PROOF_OWNER_PASSWORD: ${PROOF_OWNER_PASSWORD:?set PROOF_OWNER_PASSWORD}
+      STATE_DIR: /state
+    volumes:
+      - proof-ca:/ca:ro
+      - proof-state:/state
+
+volumes:
+  caddy-data:
+  proof-ca:
+  proof-state:

@@ -4,12 +4,12 @@ import { requestMeta, AuthError } from "@/lib/guards";
 import { requireDashboardUser } from "@/lib/dashboard-auth";
 import { loadSubmissionForReview } from "@/lib/review";
 import { audit } from "@/lib/audit";
-import { setSubmissionStatus, deleteSubmission } from "@/actions/submissions";
+import { setSubmissionStatus, deleteSubmission, unshareSubmission } from "@/actions/submissions";
 import { shareSubmission } from "@/actions/requests";
 import { can } from "@/lib/rbac";
 import { applicationStatusLabel } from "@/lib/application-status";
 import { db } from "@/db";
-import { memberships, user } from "@/db/schema";
+import { memberships, submissionShares, user } from "@/db/schema";
 import { ActionForm } from "@/components/action-form";
 import {
   Badge,
@@ -52,6 +52,20 @@ export default async function SubmissionReviewPage({
           .innerJoin(user, eq(user.id, memberships.userId))
           .where(eq(memberships.orgId, ctx.orgId))
       ).filter((member) => member.role === "reviewer")
+    : [];
+
+  const canManageShares = request.createdBy === ctx.userId || can(ctx.role, "users:manage");
+  const shares = canManageShares
+    ? await db
+        .select({
+          userId: submissionShares.userId,
+          createdAt: submissionShares.createdAt,
+          name: user.name,
+          email: user.email,
+        })
+        .from(submissionShares)
+        .innerJoin(user, eq(user.id, submissionShares.userId))
+        .where(eq(submissionShares.submissionId, submission.id))
     : [];
 
   const meta = await requestMeta();
@@ -156,6 +170,44 @@ export default async function SubmissionReviewPage({
         </>
       )}
 
+      {shares.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Shared with</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-y divide-stone-100">
+              {shares.map((share) => (
+                <li key={share.userId} className="flex items-center justify-between gap-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <span className="font-medium">{share.name}</span>
+                    <span className="ml-2 text-stone-500">{share.email}</span>
+                    <span className="tnum ml-2 text-xs text-stone-400">
+                      since {share.createdAt.toLocaleDateString("en-AU")}
+                    </span>
+                  </div>
+                  <ActionForm
+                    action={unshareSubmission}
+                    successMessage="Reviewer access removed."
+                    confirm={{
+                      title: `Remove ${share.name}'s access?`,
+                      body: "They can no longer open this application. You can share it with them again later.",
+                      confirmLabel: "Remove access",
+                    }}
+                  >
+                    <input type="hidden" name="submissionId" value={submission.id} />
+                    <input type="hidden" name="userId" value={share.userId} />
+                    <Button type="submit" variant="ghost" size="sm" aria-label={`Remove access for ${share.email}`}>
+                      Remove
+                    </Button>
+                  </ActionForm>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="flex flex-wrap items-end gap-4">
         {can(ctx.role, "submissions:view_own") && (
         <ActionForm
@@ -211,7 +263,15 @@ export default async function SubmissionReviewPage({
         )}
 
         {can(ctx.role, "deletion:action") && !submission.purgedAt && (
-          <ActionForm action={deleteSubmission} successMessage="Application data deleted.">
+          <ActionForm
+            action={deleteSubmission}
+            successMessage="Application data deleted."
+            confirm={{
+              title: "Delete this application's data?",
+              body: "The application's answers and documents are crypto-shredded and cannot be recovered. A metadata-only audit record remains.",
+              confirmLabel: "Delete permanently",
+            }}
+          >
             <input type="hidden" name="submissionId" value={submission.id} />
             <Button type="submit" variant="destructive">
               Delete (crypto-shred)

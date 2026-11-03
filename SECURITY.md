@@ -6,6 +6,28 @@ right-to-work evidence, or police-check documents. The
 [release checklist](https://github.com/jusso-dev/Recruvault/issues/37) records
 security requirements that are still open. Customer keys are enrolled per organisation and job seeker. The server can unwrap a key while that session or API credential is unlocked. A database copy without the unlock secret does not reveal new envelopes. Legacy rows and secure-link render delegation still depend on `LOCAL_KEK`. Details and the restore procedure are in [docs/encryption.md](docs/encryption.md) and [docs/operations.md](docs/operations.md).
 
+## Browser security policy
+
+The nonce-based Content Security Policy is enforced in production from the
+start. There was no report-only phase and there is no violation-report
+endpoint: the production browser tests (`playwright.prod.config.ts`, run in
+CI's production smoke job) load the pages with the enforced policy and fail on
+any violation, so there are no reports to collect or sanitise. The policy,
+caching, document framing, and CORS rules are described in
+[docs/operations.md](docs/operations.md#browser-security-policy).
+
+Remaining allowances, owned by the maintainer (@jusso-dev):
+
+| Allowance | Why it is needed | Remove when |
+| --- | --- | --- |
+| `script-src 'strict-dynamic'` | Next.js loads route chunks from its nonced runtime. Trust passes to scripts those scripts insert; parser-inserted scripts without the nonce, including same-origin ones, stay blocked. | Next.js can load every chunk under a hash or SRI policy without dynamic insertion. |
+| `img-src data: blob:` | Kept from the Next.js reference policy for image sources that stylesheets or libraries may inline. No application code creates them today, and images cannot run script. | The production browser test covers every page (seeker pages are not yet covered) and shows none are needed. |
+| `frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN` on `/api/documents/<id>/view` only | The secure-link response page shows the job description PDF in a same-origin iframe. All other responses deny framing. | The job description is rendered without a frame (for example, a page-image viewer). |
+| Development only: `'unsafe-eval'` and `ws:` | React debugging and hot reload in `next dev`. Never sent when `NODE_ENV=production`. | Not applicable to production. |
+
+`style-src` has no `unsafe-inline` allowance. Inline style attributes are
+avoided; styles come from stylesheets or nonced style elements.
+
 ## Dependency updates
 
 Use the committed npm lockfiles for both the application and `mcp/`. Docker
@@ -74,12 +96,20 @@ configuration and database tooling.
 
 ## Unresolved upstream findings
 
-As assessed on 14 October 2026, braces 3.0.3 has a high-severity
-[stack-exhaustion advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
-(CVE-2026-93687) with no published fixed version. The dependency is used by
-Next.js ESLint tooling through fast-glob and micromatch. Lint only trusted
-repository inputs; this restriction is a mitigation, not a fix. A full npm
-audit can report several affected packages along that dependency chain.
+The braces 3.0.3 advisory (GHSA-vfj7-8cjw-p6xm) was withdrawn by GitHub on
+23 October 2026. braces 3.0.3 is still the latest release and is still in the
+Next.js ESLint tooling chain; it is no longer reported by audits.
+
+As assessed on 3 November 2026, the full development audit reports minimatch
+3.1.5 ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249),
+moderate). ESLint and its React/import/a11y plugins call the minimatch 3 API,
+and the patched 11.x line is not a drop-in replacement. Lint only trusted
+repository inputs; this restriction is a mitigation, not a fix. Other
+glob/minimatch consumers are overridden to patched releases:
+`@sentry/bundler-plugins`, `rimraf` (runtime, via Inngest telemetry), and
+`archiver-utils`, `readdir-glob`, `@typescript-eslint/typescript-estree`
+(development). Remove each override once its upstream range includes a patched
+version.
 
 Track this and other scan findings in
 [the dependency-remediation issue](https://github.com/jusso-dev/Recruvault/issues/36).

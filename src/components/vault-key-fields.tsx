@@ -3,9 +3,23 @@
 import { useState } from "react";
 import { Button, Input, Label } from "@/components/ui";
 
+/** Inline feedback so a mistyped confirmation is caught before submitting. */
+function MatchHint({ id, value, confirm, noun }: { id: string; value: string; confirm: string; noun: string }) {
+  if (!confirm) return null;
+  const matches = value === confirm;
+  return (
+    <p id={id} role="status" className={`mt-1 text-xs ${matches ? "text-emerald-700" : "text-red-700"}`}>
+      {matches ? `The ${noun} match.` : `The ${noun} do not match yet.`}
+    </p>
+  );
+}
+
 export function VaultKeyFields() {
   const [mode, setMode] = useState<"generated" | "import" | "passphrase">("generated");
   const [key, setKey] = useState("");
+  const [keyConfirm, setKeyConfirm] = useState("");
+  const [passphrase, setPassphrase] = useState("");
+  const [passphraseConfirm, setPassphraseConfirm] = useState("");
 
   function generate() {
     const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -45,11 +59,31 @@ export function VaultKeyFields() {
         <>
           <div>
             <Label htmlFor="passphrase">Passphrase</Label>
-            <Input id="passphrase" name="passphrase" type="password" required minLength={12} autoComplete="new-password" />
+            <Input
+              id="passphrase"
+              name="passphrase"
+              type="password"
+              value={passphrase}
+              onChange={(event) => setPassphrase(event.target.value)}
+              required
+              minLength={12}
+              autoComplete="new-password"
+            />
           </div>
           <div>
             <Label htmlFor="passphraseConfirm">Confirm passphrase</Label>
-            <Input id="passphraseConfirm" name="passphraseConfirm" type="password" required minLength={12} autoComplete="new-password" />
+            <Input
+              id="passphraseConfirm"
+              name="passphraseConfirm"
+              type="password"
+              value={passphraseConfirm}
+              onChange={(event) => setPassphraseConfirm(event.target.value)}
+              required
+              minLength={12}
+              autoComplete="new-password"
+              aria-describedby="passphraseConfirmHint"
+            />
+            <MatchHint id="passphraseConfirmHint" value={passphrase} confirm={passphraseConfirm} noun="passphrases" />
           </div>
         </>
       ) : (
@@ -71,7 +105,17 @@ export function VaultKeyFields() {
           </div>
           <div>
             <Label htmlFor="encryptionKeyConfirm">Confirm encryption key</Label>
-            <Input id="encryptionKeyConfirm" name="encryptionKeyConfirm" type="password" required autoComplete="off" />
+            <Input
+              id="encryptionKeyConfirm"
+              name="encryptionKeyConfirm"
+              type="password"
+              value={keyConfirm}
+              onChange={(event) => setKeyConfirm(event.target.value)}
+              required
+              autoComplete="off"
+              aria-describedby="encryptionKeyConfirmHint"
+            />
+            <MatchHint id="encryptionKeyConfirmHint" value={key} confirm={keyConfirm} noun="keys" />
           </div>
         </>
       )}

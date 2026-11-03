@@ -7,13 +7,13 @@ import {
   requests,
   submissionDocuments,
   submissions,
-  submissionShares,
 } from "@/db/schema";
 import { requireOrgUser, requestMeta, AuthError } from "@/lib/guards";
 import { readLinkSession } from "@/lib/link-session";
 import { DocumentAccessError, readProtectedDocument } from "@/lib/document-protect";
 import { audit } from "@/lib/audit";
 import { can } from "@/lib/rbac";
+import { canViewOrgDocument } from "@/lib/review";
 import { watermarkPdf } from "@/lib/watermark";
 
 /**
@@ -64,39 +64,22 @@ export async function GET(
   // --- Organisation-side access ---
   try {
     const ctx = await requireOrgUser();
-    if (doc.orgId === ctx.orgId) {
-      if (can(ctx.role, "documents:view")) {
-        authorised = true;
-        allowDownload = can(ctx.role, "export:documents");
-        viewerLabel = ctx.userEmail;
-      } else if (ctx.role === "reviewer") {
-        // Reviewers see documents only on submissions shared with them.
-        const [shared] = await db
-          .select({ id: submissionShares.id })
-          .from(submissionDocuments)
-          .innerJoin(
-            submissionShares,
-            eq(submissionShares.submissionId, submissionDocuments.submissionId),
-          )
-          .where(
-            and(
-              eq(submissionDocuments.documentId, doc.id),
-              eq(submissionShares.userId, ctx.userId),
-            ),
-          );
-        authorised = !!shared;
-      }
-      if (authorised) {
-        await audit({
-          orgId: ctx.orgId,
-          actorType: "org_user",
-          actorId: ctx.userId,
-          action: wantsDownload ? "document.downloaded" : "document.rendered",
-          targetType: "document",
-          targetId: doc.id,
-          ...meta,
-        });
-      }
+    // Same ownership rule as submission review: recruiters see documents on
+    // their own requests' submissions (or ones shared with them), reviewers
+    // only shared ones, and view-all roles every organisation document.
+    if (await canViewOrgDocument(ctx, doc)) {
+      authorised = true;
+      allowDownload = can(ctx.role, "export:documents");
+      viewerLabel = ctx.userEmail;
+      await audit({
+        orgId: ctx.orgId,
+        actorType: "org_user",
+        actorId: ctx.userId,
+        action: wantsDownload ? "document.downloaded" : "document.rendered",
+        targetType: "document",
+        targetId: doc.id,
+        ...meta,
+      });
     }
   } catch (err) {
     if (!(err instanceof AuthError)) throw err;
@@ -192,7 +175,7 @@ export async function GET(
       headers: {
         ...commonHeaders,
         "Content-Type": "application/pdf",
-        "Content-Disposition": `inline; filename="${doc.fileName}"`,
+        "Content-Disposition": `inline; filename="${doc.fileName.replace(/[\r\n"]/g, "")}"`,
       },
     });
   }

@@ -76,24 +76,11 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
+  // Every page, including not-found responses and pages added later, gets the
+  // nonce policy. Only build assets, icons, public files, and non-versioned API
+  // routes skip the proxy.
   matcher: [
-    "/",
-    "/setup",
-    "/sign-in",
-    "/sign-up",
-    "/dashboard/:path*",
-    "/wallet/:path*",
-    "/roles/:path*",
-    "/documents/:path*",
-    "/overview",
-    "/integrations",
-    "/onboarding",
-    "/verify-email",
-    "/vault/:path*",
-    "/account-deleted",
-    "/forgot-password",
-    "/reset-password",
-    "/r/:path*",
+    "/((?!api/|_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|brand/).*)",
     "/api/v1/:path*",
   ],
 };

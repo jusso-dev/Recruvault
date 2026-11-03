@@ -8,12 +8,17 @@ import { authClient } from "@/lib/auth-client";
 import { Button, Card, CardContent, Input, Label } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { userFacingError } from "@/lib/user-facing-errors";
+import { safeNextPath } from "@/lib/utils";
 
 export function SignUpForm({ allowRecruiterSignup }: { allowRecruiterSignup: boolean }) {
   const params = useSearchParams();
   const [type, setType] = useState<"org" | "seeker">(
     allowRecruiterSignup && params.get("type") === "org" ? "org" : "seeker",
   );
+  // An invitation link sends people here with ?next=/invite/...; verification
+  // then returns them to it.
+  const next = safeNextPath(params.get("next"));
+  const callbackURL = next ?? (type === "org" ? "/onboarding" : "/overview");
   const [busy, setBusy] = useState(false);
   const [createdEmail, setCreatedEmail] = useState<string | null>(null);
   const { showToast } = useToast();
@@ -31,7 +36,7 @@ export function SignUpForm({ allowRecruiterSignup }: { allowRecruiterSignup: boo
         name: String(form.get("name")),
         email,
         password: String(form.get("password")),
-        callbackURL: type === "org" ? "/onboarding" : "/overview",
+        callbackURL,
         ...requested,
       });
       if (error) {
@@ -58,7 +63,7 @@ export function SignUpForm({ allowRecruiterSignup }: { allowRecruiterSignup: boo
     try {
       const { error } = await authClient.sendVerificationEmail({
         email: createdEmail,
-        callbackURL: type === "org" ? "/onboarding" : "/overview",
+        callbackURL,
       });
       if (error) {
         showToast({
@@ -118,7 +123,13 @@ export function SignUpForm({ allowRecruiterSignup }: { allowRecruiterSignup: boo
             </Button>
           </div>
           <p className="text-xs leading-5 text-stone-500">
-            After verification, {type === "org" ? "you’ll continue to organisation setup" : "your job-seeker workspace will open"}.
+            After verification,{" "}
+            {next
+              ? "you’ll return to where you started"
+              : type === "org"
+                ? "you’ll continue to organisation setup"
+                : "your job-seeker workspace will open"}
+            .
           </p>
         </CardContent>
       </Card>
@@ -180,7 +191,10 @@ export function SignUpForm({ allowRecruiterSignup }: { allowRecruiterSignup: boo
         </form>
         <p className="text-sm text-stone-600">
           Already have an account?{" "}
-          <Link href="/sign-in" className="font-medium text-accent underline underline-offset-4">
+          <Link
+            href={next ? `/sign-in?next=${encodeURIComponent(next)}` : "/sign-in"}
+            className="font-medium text-accent underline underline-offset-4"
+          >
             Sign in
           </Link>
         </p>

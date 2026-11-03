@@ -11,7 +11,10 @@ const OPERATION_SCOPES: Record<string, ApiScope | null> = {
   "get /requests": "roles:read",
   "post /requests": "roles:write",
   "get /requests/{id}": "roles:read",
+  "patch /requests/{id}": "roles:write",
+  "patch /submissions/{id}": "submissions:write",
   "post /requests/{id}/jd": "jd:write",
+  "post /requests/{id}/nda": "jd:write",
   "get /requests/{id}/submissions": "submissions:read",
   "post /requests/{id}/send": "invitations:send",
   "get /reports/recruiter": "reports:read",
@@ -191,6 +194,62 @@ export function buildOpenApiSpec() {
           parameters: [idParam()],
           responses: { "200": { description: "OK" }, "404": errRef() },
         },
+        patch: {
+          tags: ["Recruiter"],
+          summary: "Change a request's status",
+          parameters: [idParam()],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: { status: { type: "string", enum: ["open", "closing_soon", "closed", "archived"] } },
+                  required: ["status"],
+                },
+              },
+            },
+          },
+          responses: { "200": { description: "Updated" }, "400": errRef(), "404": errRef() },
+        },
+      },
+      "/submissions/{id}": {
+        patch: {
+          tags: ["Recruiter"],
+          summary: "Move an application to a pipeline stage",
+          description:
+            "Same access rule as review: the request owner, roles that see all submissions, or a user the submission is shared with and whose role can manage status.",
+          parameters: [idParam()],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    status: {
+                      type: "string",
+                      enum: [
+                        "received",
+                        "under_review",
+                        "shortlisted",
+                        "interview",
+                        "offer",
+                        "accepted",
+                        "placed",
+                        "follow_up",
+                        "declined",
+                        "withdrawn",
+                      ],
+                    },
+                  },
+                  required: ["status"],
+                },
+              },
+            },
+          },
+          responses: { "200": { description: "Updated" }, "400": errRef(), "404": errRef() },
+        },
       },
       "/requests/{id}/jd": {
         post: {
@@ -205,6 +264,26 @@ export function buildOpenApiSpec() {
                   type: "object",
                   properties: { jd: { type: "string", format: "binary" } },
                   required: ["jd"],
+                },
+              },
+            },
+          },
+          responses: { "200": { description: "Uploaded" }, "400": errRef(), "404": errRef() },
+        },
+      },
+      "/requests/{id}/nda": {
+        post: {
+          tags: ["Recruiter"],
+          summary: "Upload the non-disclosure agreement responders must accept (PDF or Word .docx)",
+          parameters: [idParam()],
+          requestBody: {
+            required: true,
+            content: {
+              "multipart/form-data": {
+                schema: {
+                  type: "object",
+                  properties: { nda: { type: "string", format: "binary" } },
+                  required: ["nda"],
                 },
               },
             },

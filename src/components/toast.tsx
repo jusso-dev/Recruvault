@@ -52,11 +52,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!toast) return;
-    const timeout = window.setTimeout(
-      dismissToast,
-      toast.tone === "error" ? 10_000 : 6_000,
-    );
+    // Errors stay until dismissed so nobody misses them; others auto-dismiss.
+    if (!toast || toast.tone === "error") return;
+    const timeout = window.setTimeout(dismissToast, 6_000);
     return () => window.clearTimeout(timeout);
   }, [dismissToast, toast]);
 

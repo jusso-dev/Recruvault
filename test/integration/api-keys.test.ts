@@ -10,6 +10,8 @@ import {
   memberships,
   organisations,
   requests,
+  submissionShares,
+  submissions,
   user,
   vaultKeys,
 } from "@/db/schema";
@@ -31,6 +33,7 @@ let routes: {
   reports: typeof import("@/app/api/v1/reports/recruiter/route");
   profile: typeof import("@/app/api/v1/me/profile/route");
   key: typeof import("@/app/api/v1/me/key/route");
+  submission: typeof import("@/app/api/v1/submissions/[id]/route");
 };
 let store: typeof import("@/lib/api-key-store");
 let rateLimit: typeof import("@/lib/rate-limit");
@@ -51,6 +54,7 @@ beforeAll(async () => {
     reports: await import("@/app/api/v1/reports/recruiter/route"),
     profile: await import("@/app/api/v1/me/profile/route"),
     key: await import("@/app/api/v1/me/key/route"),
+    submission: await import("@/app/api/v1/submissions/[id]/route"),
   };
   store = await import("@/lib/api-key-store");
   rateLimit = await import("@/lib/rate-limit");
@@ -398,5 +402,69 @@ describe("shared request budgets", () => {
 
   it("prunes idle windows", async () => {
     expect(await rateLimit.pruneRateLimits(new Date(Date.now() + 2 * DAY))).toBeGreaterThan(0);
+  });
+});
+
+describe("status changes over the API", () => {
+  it("changes a request's status with roles:write and the same rules as the dashboard", async () => {
+    const org = await seedOrg();
+    const other = await seedOrg();
+    const writer = await orgKey(org, ["roles:write"]);
+    const reader = await orgKey(org, ["roles:read"]);
+
+    const patch = (key: string, id: string, body: unknown) =>
+      routes.request.PATCH(call(`/requests/${id}`, key, { method: "PATCH", body }), params(id));
+
+    expect((await patch(reader.key, org.requestId, { status: "closed" })).status).toBe(403);
+    expect((await patch(writer.key, org.requestId, { status: "deleted" })).status).toBe(400);
+    expect((await patch(writer.key, other.requestId, { status: "closed" })).status).toBe(404);
+    expect((await patch(writer.key, "not-a-uuid", { status: "closed" })).status).toBe(404);
+
+    const response = await patch(writer.key, org.requestId, { status: "closed" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ id: org.requestId, status: "closed" });
+    const [row] = await db.select().from(requests).where(eq(requests.id, org.requestId));
+    expect(row.status).toBe("closed");
+    expect(row.closedAt).not.toBeNull();
+    const [event] = await db
+      .select()
+      .from(auditEvents)
+      .where(and(eq(auditEvents.targetId, org.requestId), eq(auditEvents.action, "request.status.closed")));
+    expect(event).toBeTruthy();
+  });
+
+  it("moves an application only for callers who may manage it", async () => {
+    const org = await seedOrg();
+    const [submission] = await db
+      .insert(submissions)
+      .values({ requestId: org.requestId, status: "received", submittedAt: new Date() })
+      .returning({ id: submissions.id });
+    const id = submission.id;
+    const patch = (key: string, target: string, body: unknown) =>
+      routes.submission.PATCH(call(`/submissions/${target}`, key, { method: "PATCH", body }), params(target));
+
+    const ownerWriter = await orgKey(org, ["submissions:write"]);
+    const ownerReader = await orgKey(org, ["submissions:read"]);
+    const recruiterId = await addMember(org.orgId, "recruiter");
+    const recruiter = await orgKey({ ...org, userId: recruiterId }, ["submissions:write"]);
+    const reviewerId = await addMember(org.orgId, "reviewer");
+    const reviewer = await orgKey({ ...org, userId: reviewerId }, ["submissions:write"]);
+
+    expect((await patch(ownerReader.key, id, { status: "shortlisted" })).status).toBe(403);
+    expect((await patch(ownerWriter.key, id, { status: "started" })).status).toBe(400);
+    expect((await patch(ownerWriter.key, randomUUID(), { status: "shortlisted" })).status).toBe(404);
+    // Another recruiter's application is out of reach until it is shared.
+    expect((await patch(recruiter.key, id, { status: "shortlisted" })).status).toBe(403);
+    // Reviewers stay read-only even when an application is shared with them.
+    await db.insert(submissionShares).values({ submissionId: id, userId: reviewerId });
+    expect((await patch(reviewer.key, id, { status: "shortlisted" })).status).toBe(403);
+
+    const response = await patch(ownerWriter.key, id, { status: "interview" });
+    expect(response.status).toBe(200);
+    const [row] = await db.select().from(submissions).where(eq(submissions.id, id));
+    expect(row.status).toBe("interview");
+
+    await db.insert(submissionShares).values({ submissionId: id, userId: recruiterId });
+    expect((await patch(recruiter.key, id, { status: "offer" })).status).toBe(200);
   });
 });

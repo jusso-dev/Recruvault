@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { db } from "@/db";
 import {
   documents,
@@ -33,6 +33,18 @@ export interface SubmissionDocumentRef {
 }
 
 /**
+ * Recruiters (view_own) manage only the requests they created; roles with
+ * org-wide submission access manage every request in the organisation. The
+ * dashboard request page applies the same rule.
+ */
+export function canManageRequest(
+  ctx: Pick<OrgContext, "role" | "userId">,
+  request: { createdBy: string | null },
+): boolean {
+  return can(ctx.role, "submissions:view_all") || request.createdBy === ctx.userId;
+}
+
+/**
  * Load a submission for review with tenant + role checks applied in the data
  * layer. Recruiters see their own/team requests; reviewers only submissions
  * explicitly shared with them; admins/owners/compliance see all (org-scoped).
@@ -49,6 +61,9 @@ export async function assertSubmissionAccess(ctx: OrgContext, submissionId: stri
     .innerJoin(requests, eq(requests.id, submissions.requestId))
     .where(and(eq(submissions.id, submissionId), eq(requests.orgId, ctx.orgId)));
   if (!row) throw new AuthError("Submission not found.");
+  // A draft holds link-wrapped values only the responder can open; it is not
+  // an application yet, so it cannot be reviewed, re-statused, or shared.
+  if (row.submission.status === "started") throw new AuthError("This application is still in progress.");
 
   if (can(ctx.role, "submissions:view_all")) {
     // ok
@@ -113,6 +128,46 @@ export async function loadSubmissionForReview(ctx: OrgContext, submissionId: str
   }));
 
   return { submission: row.submission, request: row.request, values: decrypted, documents: docs };
+}
+
+/**
+ * Organisation-side document gate, mirroring assertSubmissionAccess. Roles
+ * that see every submission see every organisation document. Otherwise a
+ * document is visible only when it belongs to a submission the caller may
+ * review (own request, or shared with them), or, for request creators, is
+ * the JD or NDA of their own request.
+ */
+export async function canViewOrgDocument(
+  ctx: OrgContext,
+  doc: { id: string; orgId: string | null },
+): Promise<boolean> {
+  if (doc.orgId !== ctx.orgId) return false;
+  if (can(ctx.role, "submissions:view_all") && can(ctx.role, "documents:view")) return true;
+
+  const onSubmissions = await db
+    .select({ submissionId: submissionDocuments.submissionId, createdBy: requests.createdBy })
+    .from(submissionDocuments)
+    .innerJoin(submissions, eq(submissions.id, submissionDocuments.submissionId))
+    .innerJoin(requests, eq(requests.id, submissions.requestId))
+    .where(and(eq(submissionDocuments.documentId, doc.id), eq(requests.orgId, ctx.orgId)));
+  for (const row of onSubmissions) {
+    if (can(ctx.role, "submissions:view_own") && row.createdBy === ctx.userId) return true;
+    if (await isSharedWith(row.submissionId, ctx.userId)) return true;
+  }
+
+  if (!can(ctx.role, "documents:view")) return false;
+  const [ownRequest] = await db
+    .select({ id: requests.id })
+    .from(requests)
+    .where(
+      and(
+        eq(requests.orgId, ctx.orgId),
+        eq(requests.createdBy, ctx.userId),
+        or(eq(requests.jdDocumentId, doc.id), eq(requests.ndaDocumentId, doc.id)),
+      ),
+    )
+    .limit(1);
+  return !!ownRequest;
 }
 
 async function isSharedWith(submissionId: string, userId: string): Promise<boolean> {

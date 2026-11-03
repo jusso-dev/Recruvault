@@ -1,13 +1,14 @@
 "use server";
 
 import { createHash, randomBytes } from "crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import {
   discoveryProfiles,
   requests,
   savedRoles,
+  submissions,
   walletDocuments,
   walletItems,
   walletShares,
@@ -29,6 +30,7 @@ import {
 } from "@/lib/fields";
 import { sendErasureConfirmation } from "@/lib/email";
 import { deleteWalletDocumentRecord, eraseCandidate } from "@/lib/retention";
+import { WITHDRAWABLE_APPLICATION_STATUSES } from "@/lib/application-status";
 import type { ActionResult } from "./org";
 
 const log = getLogger("wallet");
@@ -252,7 +254,11 @@ export async function deleteWalletDocument(formData: FormData): Promise<ActionRe
   return { ok: true };
 }
 
-/** Revoke future use of a shared credential or document. */
+/**
+ * Record that the job seeker withdrew a share. This is a ledger entry only:
+ * the organisation's submitted copy is not deleted and stays until its
+ * retention policy purges it. The wallet page says so.
+ */
 export async function revokeWalletShare(formData: FormData): Promise<ActionResult> {
   const ctx = await requireEnrolledCandidate();
   const id = String(formData.get("id") ?? "");
@@ -320,6 +326,46 @@ export async function toggleSavedRole(formData: FormData): Promise<ActionResult>
       requestId,
     });
   }
+
+  revalidatePath("/roles");
+  revalidatePath("/overview");
+  return { ok: true };
+}
+
+/**
+ * Withdraw one of the seeker's own applications. Only the status changes; the
+ * organisation keeps the record under its retention schedule.
+ */
+export async function withdrawApplication(formData: FormData): Promise<ActionResult> {
+  const ctx = await requireEnrolledCandidate();
+  const submissionId = String(formData.get("submissionId") ?? "");
+
+  const [updated] = await db
+    .update(submissions)
+    .set({ status: "withdrawn", updatedAt: new Date() })
+    .where(
+      and(
+        sql`${submissions.id}::text = ${submissionId}`,
+        eq(submissions.candidateAccountId, ctx.candidateAccountId),
+        inArray(submissions.status, [...WITHDRAWABLE_APPLICATION_STATUSES]),
+      ),
+    )
+    .returning({ id: submissions.id, requestId: submissions.requestId });
+  if (!updated) return { ok: false, error: "This application cannot be withdrawn." };
+
+  const [request] = await db
+    .select({ orgId: requests.orgId })
+    .from(requests)
+    .where(eq(requests.id, updated.requestId));
+  await audit({
+    orgId: request?.orgId,
+    actorType: "candidate",
+    actorId: ctx.candidateAccountId,
+    action: "submission.status.withdrawn",
+    targetType: "submission",
+    targetId: updated.id,
+    ...(await requestMeta()),
+  });
 
   revalidatePath("/roles");
   revalidatePath("/overview");

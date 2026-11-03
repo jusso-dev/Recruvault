@@ -28,7 +28,7 @@ export default async function RootLayout({
   await connection();
   return (
     <html
-      lang="en"
+      lang="en-AU"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-stone-50 text-stone-900 font-sans">

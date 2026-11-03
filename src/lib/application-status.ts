@@ -38,6 +38,21 @@ export const ACTIVE_APPLICATION_STATUSES = [
   "follow_up",
 ] as const;
 
+/** Statuses a job seeker can still withdraw from. */
+export const WITHDRAWABLE_APPLICATION_STATUSES = [
+  "received",
+  "under_review",
+  "shortlisted",
+  "interview",
+  "offer",
+  "accepted",
+  "follow_up",
+] as const;
+
+export function canWithdrawApplication(status: string) {
+  return (WITHDRAWABLE_APPLICATION_STATUSES as readonly string[]).includes(status);
+}
+
 export function applicationStatusLabel(status: string) {
   return APPLICATION_STATUS_LABELS[status] ?? status.replaceAll("_", " ");
 }

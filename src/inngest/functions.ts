@@ -15,11 +15,18 @@ import { getObjectBytes, deleteObject } from "@/lib/storage";
 import { scanBytes, sniffContentType } from "@/lib/scan";
 import { audit } from "@/lib/audit";
 import { findPurgeDueSubmissionIds, purgeSubmission, resumeIncompleteErasures } from "@/lib/retention";
-import { outboxStats, publishPendingOutbox, pruneOutbox, reconcileOutbox } from "@/lib/outbox";
+import {
+  outboxNeedsAttention,
+  outboxStats,
+  publishPendingOutbox,
+  pruneOutbox,
+  reconcileOutbox,
+} from "@/lib/outbox";
 import { pruneRateLimits } from "@/lib/rate-limit";
 import { notifySubmissionReceived, sendDeliveryEmail, sendDeliverySms } from "@/lib/delivery-worker";
 import { queueRequestDelivery } from "@/lib/requests-service";
 import { processDeletionTasks } from "@/lib/deletion-queue";
+import { sendInvitationEmail } from "@/lib/invitations";
 import { reconcileStorage } from "@/lib/storage-reconciler";
 import { migrateLegacyDocuments } from "@/lib/document-migration";
 import { nightlyBackupIfDue } from "@/lib/backup";
@@ -189,6 +196,16 @@ export const submissionReceived = inngest.createFunction(
   async ({ event, step }) => {
     const { submissionId } = parseEvent("submission/received", event.data);
     const outcome = await step.run("notify-recruiter", () => notifySubmissionReceived(submissionId));
+    return { outcome };
+  },
+);
+
+/** Email a teammate invitation once. The link is rebuilt inside the step and never returned. */
+export const deliverOrgInvitation = inngest.createFunction(
+  { id: "deliver-org-invitation", retries: 3, triggers: [{ event: "org-invite/send" }] },
+  async ({ event, step }) => {
+    const { invitationId } = parseEvent("org-invite/send", event.data);
+    const outcome = await step.run("send-invitation", () => sendInvitationEmail(invitationId));
     return { outcome };
   },
 );
@@ -389,7 +406,7 @@ export const outboxMaintenance = inngest.createFunction(
     const stats = await step.run("stats", async () => {
       const current = await outboxStats();
       const line = { ...current, reconciled, pruned, metric: "outbox_depth" };
-      if (current.dead > 0 || current.oldestPendingSeconds > 900) log.warn(line, "outbox needs attention");
+      if (outboxNeedsAttention(current)) log.warn(line, "outbox needs attention");
       else log.info(line, "outbox depth");
       return current;
     });
@@ -440,6 +457,7 @@ export const functions = [
   deliverRequest,
   scanDocument,
   submissionReceived,
+  deliverOrgInvitation,
   retentionPurge,
   purgeSubmissionJob,
   expiryReminders,

@@ -108,12 +108,15 @@ export default async function RespondPage({
   }
 
   // A previously saved draft (structured answers) for this link, if any.
-  const draft = await loadDraftValues(at.id);
+  const { values: draft, restoreFailed: draftLost } = await loadDraftValues(at.id);
   const hasDraft = Object.keys(draft).length > 0;
 
   const jd = request.jdDocumentId
     ? (await db.select().from(documents).where(eq(documents.id, request.jdDocumentId)))[0]
     : null;
+  const nda = request.ndaDocumentId
+    ? (await db.select().from(documents).where(eq(documents.id, request.ndaDocumentId)))[0]
+    : undefined;
 
   const watermark = `${at.recipientEmail} · ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
 
@@ -153,23 +156,14 @@ export default async function RespondPage({
           </CardHeader>
           <CardContent>
             <div className="relative overflow-hidden rounded-lg border border-stone-200">
-              <object
-                data={`/api/documents/${jd.id}/view`}
-                type="application/pdf"
+              {/* An iframe, not <object>: the page CSP keeps object-src 'none' and
+                  allows same-origin frames, and the document route allows
+                  framing only by this origin. */}
+              <iframe
+                src={`/api/documents/${jd.id}/view`}
                 className="h-[480px] w-full"
-                aria-label="Job description PDF"
-              >
-                <p className="p-4 text-sm">
-                  <a
-                    className="underline"
-                    href={`/api/documents/${jd.id}/view`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open the job description
-                  </a>
-                </p>
-              </object>
+                title="Job description PDF"
+              />
               {/* Dynamic watermark: responder identity + timestamp, deterrence for screenshots. */}
               <div
                 aria-hidden
@@ -212,6 +206,13 @@ export default async function RespondPage({
               <p className="rounded-lg border border-accent-tint-border bg-accent-tint p-3 text-sm text-accent">
                 We restored your saved draft. Review your answers, re-attach any files,
                 then submit.
+              </p>
+            )}
+            {draftLost && (
+              <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                Your saved draft couldn&apos;t be restored in this browser, so it was discarded.
+                Drafts can only be reopened in the browser that saved them. Please fill in your
+                answers again.
               </p>
             )}
             {isCandidate && prefill.size > 0 && (
@@ -298,7 +299,23 @@ export default async function RespondPage({
             {request.ndaDocumentId && (
               <label className="flex items-start gap-2 text-sm">
                 <input type="checkbox" name="nda" required className="mt-0.5" />
-                <span>I accept the non-disclosure agreement.</span>
+                <input type="hidden" name="ndaDocumentId" value={request.ndaDocumentId} />
+                <span>
+                  I have read and accept the{" "}
+                  {nda && nda.scanStatus === "clean" ? (
+                    <a
+                      className="underline"
+                      href={`/api/documents/${nda.id}/view`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      non-disclosure agreement
+                    </a>
+                  ) : (
+                    "non-disclosure agreement"
+                  )}
+                  .
+                </span>
               </label>
             )}
             <Button type="submit" size="lg" className="w-full">

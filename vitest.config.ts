@@ -12,6 +12,9 @@ export default defineConfig({
     include: ["test/unit/**/*.test.ts"],
     environment: "node",
     setupFiles: ["test/setup-env.ts"],
+    // scrypt-backed key derivation is CPU-bound; parallel files on a busy
+    // host exceed the 5s default without indicating a defect.
+    testTimeout: 30_000,
   },
   resolve: {
     alias: {

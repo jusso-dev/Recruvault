@@ -21,3 +21,9 @@ export function deliveryLinkToken(accessTokenId: string): { token: string; token
   const token = createHmac("sha256", secret()).update(`request-link:v1:${accessTokenId}`).digest("base64url");
   return { token, tokenHash: sha256(token) };
 }
+
+/** Teammate invitation token, rebuilt from the invitation id the same way. */
+export function invitationLinkToken(invitationId: string): { token: string; tokenHash: string } {
+  const token = createHmac("sha256", secret()).update(`org-invite:v1:${invitationId}`).digest("base64url");
+  return { token, tokenHash: sha256(token) };
+}

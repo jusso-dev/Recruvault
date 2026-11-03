@@ -27,7 +27,13 @@ import {
   sha256,
   shredDataKey,
 } from "@/lib/crypto";
-import { issueLinkSession, readLinkSession, readLinkSessionSecret, clearLinkSession } from "@/lib/link-session";
+import {
+  clearLinkSession,
+  ensureDraftSecret,
+  issueLinkSession,
+  readDraftSecret,
+  readLinkSession,
+} from "@/lib/link-session";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getLogger } from "@/lib/logger";
 import { sendOtpEmail, sendSubmissionReceived } from "@/lib/email";
@@ -35,6 +41,7 @@ import { audit } from "@/lib/audit";
 import { getSession, requestMeta } from "@/lib/guards";
 import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
 import { activeVault } from "@/lib/vault-store";
+import { VaultCryptoError } from "@/lib/vault-crypto";
 import { discardProtectedUploads, protectDocument, putProtectedObject } from "@/lib/document-protect";
 import { sniffContentType } from "@/lib/scan";
 import { allowedTypesForField, UPLOAD_MAX_BYTES } from "@/lib/fields";
@@ -182,6 +189,7 @@ export async function verifyOtp(rawToken: string, code: string): Promise<ActionR
     .set({ verifiedAt: new Date(), otpHash: null })
     .where(eq(accessTokens.id, at.id));
   await issueLinkSession(at.id);
+  await ensureDraftSecret(at.id, at.expiresAt);
 
   await audit({
     orgId: req.orgId,
@@ -223,6 +231,11 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
   }
   if (request.ndaDocumentId && formData.get("nda") !== "on") {
     return { ok: false, error: "You must accept the NDA to continue." };
+  }
+  // Acceptance covers the NDA the responder was shown, not a replacement
+  // uploaded while they had the form open.
+  if (request.ndaDocumentId && formData.get("ndaDocumentId") !== request.ndaDocumentId) {
+    return { ok: false, error: "The NDA for this role has changed. Reload the page, review it, and accept again." };
   }
 
   const fields = await db
@@ -364,7 +377,9 @@ export async function submitResponse(formData: FormData): Promise<ActionResult> 
       if (consumed.length === 0) return { alreadyDone: true as const };
 
       // Discard any saved draft for this link; the final submission (built from
-      // the submitted form) is authoritative. Cascade removes its draft values.
+      // the submitted form) is authoritative. Shred its key, then the cascade
+      // removes its draft values.
+      await shredDraftKeys(tx, at.id);
       await tx
         .delete(submissions)
         .where(and(eq(submissions.accessTokenId, at.id), eq(submissions.status, "started")));
@@ -575,6 +590,11 @@ export async function saveDraft(formData: FormData): Promise<ActionResult> {
     candidateAccountId = (await requireCandidate()).candidateAccountId;
   }
 
+  // Drafts are wrapped with this browser's per-link draft secret, issued at
+  // verification. Without it there is nothing to wrap with.
+  const draftSecret = await readDraftSecret(at.id);
+  if (!draftSecret) return { ok: false, error: "Your session has expired. Reopen the link." };
+
   try {
     await db.transaction(async (tx) => {
       const [existing] = await tx
@@ -583,20 +603,10 @@ export async function saveDraft(formData: FormData): Promise<ActionResult> {
         .where(and(eq(submissions.accessTokenId, at.id), eq(submissions.status, "started")));
 
       let submissionId: string;
-      let dek: Buffer;
-      let dekId: string;
-
       if (existing) {
         submissionId = existing.id;
-        const [prior] = await tx
-          .select({ dekId: submissionValues.dekId })
-          .from(submissionValues)
-          .where(eq(submissionValues.submissionId, submissionId))
-          .limit(1);
-        if (prior) await shredDataKey(prior.dekId, tx);
-        const linkSecret = await readLinkSessionSecret();
-        if (!linkSecret) throw new Error("Secure session expired.");
-        ({ dek, dekId } = await createDataKey(tx, { mode: "link", linkSecret, purpose: "draft", linkId: at.id }));
+        // Replace the previous draft: shred its key so the old answers are gone.
+        await shredDraftKeys(tx, at.id);
         await tx.delete(submissionValues).where(eq(submissionValues.submissionId, submissionId));
         await tx
           .update(submissions)
@@ -614,12 +624,17 @@ export async function saveDraft(formData: FormData): Promise<ActionResult> {
           })
           .returning({ id: submissions.id });
         submissionId = ins.id;
-        const linkSecret = await readLinkSessionSecret();
-        if (!linkSecret) throw new Error("Secure session expired.");
-        ({ dek, dekId } = await createDataKey(tx, { mode: "link", linkSecret, purpose: "draft", linkId: at.id }));
       }
 
+      // A key is created only when there is something to protect, so an empty
+      // draft never leaves an unreferenced key behind.
       if (values.length > 0) {
+        const { dek, dekId } = await createDataKey(tx, {
+          mode: "link",
+          linkSecret: draftSecret,
+          purpose: "draft",
+          linkId: at.id,
+        });
         const rows = await Promise.all(
           values.map(async (val) => ({
             submissionId,
@@ -638,29 +653,82 @@ export async function saveDraft(formData: FormData): Promise<ActionResult> {
   }
 }
 
-/** Decrypted structured values of the saved draft for a link, keyed by fieldId. */
-export async function loadDraftValues(accessTokenId: string): Promise<Record<string, string>> {
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Shred every key wrapping the saved draft values for a link. */
+async function shredDraftKeys(executor: Tx | typeof db, accessTokenId: string) {
+  const keys = await executor
+    .selectDistinct({ dekId: submissionValues.dekId })
+    .from(submissionValues)
+    .innerJoin(submissions, eq(submissions.id, submissionValues.submissionId))
+    .where(and(eq(submissions.accessTokenId, accessTokenId), eq(submissions.status, "started")));
+  for (const { dekId } of keys) await shredDataKey(dekId, executor);
+}
+
+/** True when a draft key could not be unwrapped with this browser's draft secret. */
+function isUnopenable(err: unknown): boolean {
+  return err instanceof VaultCryptoError || (err instanceof Error && /unable to authenticate data/i.test(err.message));
+}
+
+/**
+ * Decrypted structured values of the saved draft for a link, keyed by fieldId.
+ *
+ * - No draft secret in this browser (another device, or a pre-upgrade
+ *   session): the draft is left intact for the browser that holds it, and the
+ *   caller is told it cannot be restored here. Saving replaces it.
+ * - A draft secret that does not open the key: that draft is unrecoverable,
+ *   so exactly the keys that failed are shredded and their values removed.
+ * - A key shredded mid-read (a concurrent save replaced the draft) or any
+ *   database error never discards anything.
+ */
+export async function loadDraftValues(
+  accessTokenId: string,
+): Promise<{ values: Record<string, string>; restoreFailed: boolean }> {
+  // Exported as a Server Action, so only the verified session for this link
+  // may read (or trigger the discard of) its draft.
+  if ((await readLinkSession()) !== accessTokenId) return { values: {}, restoreFailed: false };
   const [draft] = await db
     .select({ id: submissions.id })
     .from(submissions)
     .where(and(eq(submissions.accessTokenId, accessTokenId), eq(submissions.status, "started")));
-  if (!draft) return {};
+  if (!draft) return { values: {}, restoreFailed: false };
 
   const vals = await db
     .select()
     .from(submissionValues)
     .where(eq(submissionValues.submissionId, draft.id));
+  if (vals.length === 0) return { values: {}, restoreFailed: false };
 
+  const draftSecret = await readDraftSecret(accessTokenId);
   const out: Record<string, string> = {};
-  const linkSecret = await readLinkSessionSecret();
-  const keyCache = new Map<string, Promise<Buffer>>();
-  for (const v of vals) {
-    let p = keyCache.get(v.dekId);
-    if (!p) {
-      p = getDataKey(v.dekId, linkSecret ? { linkSecret } : undefined);
-      keyCache.set(v.dekId, p);
+  const failed = new Set<string>();
+  let replaced = false;
+  for (const dekId of new Set(vals.map((v) => v.dekId))) {
+    let key: Buffer;
+    try {
+      // Legacy LOCAL_KEK drafts open without the draft secret.
+      key = await getDataKey(dekId, { linkSecret: draftSecret ?? undefined });
+    } catch (err) {
+      if (err instanceof Error && err.message === "Data key has been shredded.") {
+        replaced = true;
+        continue;
+      }
+      if (!isUnopenable(err)) throw err;
+      failed.add(dekId);
+      continue;
     }
-    out[v.fieldId] = decryptFieldWithKey(v.valueEncrypted, await p);
+    for (const v of vals) if (v.dekId === dekId) out[v.fieldId] = decryptFieldWithKey(v.valueEncrypted, key);
   }
-  return out;
+  if (replaced) return { values: {}, restoreFailed: false };
+  if (failed.size === 0) return { values: out, restoreFailed: false };
+  if (!draftSecret) return { values: {}, restoreFailed: true };
+
+  log.warn({ accessTokenId }, "saved draft could not be opened with this browser's draft secret; discarding it");
+  await db.transaction(async (tx) => {
+    for (const dekId of failed) await shredDataKey(dekId, tx);
+    await tx
+      .delete(submissionValues)
+      .where(and(eq(submissionValues.submissionId, draft.id), inArray(submissionValues.dekId, [...failed])));
+  });
+  return { values: {}, restoreFailed: true };
 }

@@ -1,7 +1,18 @@
 import "server-only";
-import { and, eq, lt, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, ne, notExists, sql, type SQL } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@/db";
-import { deletionTasks, documentMigrations, documents, walletDocuments } from "@/db/schema";
+import {
+  dataKeys,
+  deletionTasks,
+  documentKind,
+  documentMigrations,
+  documents,
+  submissionValues,
+  walletDocuments,
+  walletItems,
+} from "@/db/schema";
+import { shredDataKey } from "@/lib/crypto";
 import {
   completeFinishedErasures,
   deletionQueueStats,
@@ -9,6 +20,7 @@ import {
 } from "@/lib/deletion-queue";
 import { stuckMigrationCount } from "@/lib/document-migration";
 import { getLogger } from "@/lib/logger";
+import { WALLET_DOCUMENT_TYPES } from "@/lib/fields";
 import { listObjects } from "@/lib/storage";
 
 /**
@@ -18,6 +30,11 @@ import { listObjects } from "@/lib/storage";
  * once it is older than the age threshold it is queued for deletion. Also
  * reports stuck and dead deletion tasks, and finishes erasure records whose
  * cleanup is complete. The report holds counts only.
+ *
+ * Document and draft keys are created before the rows that reference them
+ * commit, so a crash in between leaves a live key that nothing uses. Keys of
+ * those purposes that no table references once they are a day old are
+ * shredded. Every column that can hold a data key id is checked.
  */
 
 const log = getLogger("reconciler");
@@ -25,10 +42,53 @@ const log = getLogger("reconciler");
 const DEFAULT_ORPHAN_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 const DONE_TASK_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const DOCUMENT_PREFIXES = ["org/", "wallet/"];
+// Only purposes whose keys are written ahead of their referencing row.
+// Submission, wallet-item, and rotation keys are never considered.
+const ORPHANABLE_KEY_PURPOSES = [
+  ...documentKind.enumValues,
+  ...WALLET_DOCUMENT_TYPES.map((type) => type.type),
+  "draft",
+];
+const KEY_REFERENCES: AnyPgColumn[] = [
+  documents.dekId,
+  walletDocuments.dekId,
+  documentMigrations.dekId,
+  submissionValues.dekId,
+  walletItems.dekId,
+];
+
+/** Shred unreferenced document and draft keys older than the age threshold. */
+const ORPHAN_KEY_BATCH = 500;
+
+export async function shredOrphanKeys(minAgeMs = DEFAULT_ORPHAN_MIN_AGE_MS): Promise<number> {
+  const unreferenced: SQL[] = KEY_REFERENCES.map((column) =>
+    notExists(db.select({ one: sql`1` }).from(column.table).where(eq(column, dataKeys.id))),
+  );
+  const orphans = await db
+    .select({ id: dataKeys.id })
+    .from(dataKeys)
+    .where(
+      and(
+        isNull(dataKeys.shreddedAt),
+        inArray(dataKeys.purpose, ORPHANABLE_KEY_PURPOSES),
+        lt(dataKeys.createdAt, new Date(Date.now() - minAgeMs)),
+        ...unreferenced,
+      ),
+    )
+    // Bounded per run; the hourly reconciler works through any backlog.
+    .limit(ORPHAN_KEY_BATCH);
+  if (orphans.length > 0) {
+    await db.transaction(async (tx) => {
+      for (const { id } of orphans) await shredDataKey(id, tx);
+    });
+  }
+  return orphans.length;
+}
 
 export type ReconcileReport = {
   objects: number;
   orphansQueued: number;
+  orphanKeysShredded: number;
   pendingTasks: number;
   deadTasks: number;
   stuckTasks: number;
@@ -40,7 +100,7 @@ export type ReconcileReport = {
 type Lister = (prefix: string) => Promise<{ key: string; lastModified?: Date }[]>;
 
 export async function reconcileStorage(
-  opts: { orphanMinAgeMs?: number; list?: Lister } = {},
+  opts: { orphanMinAgeMs?: number; orphanKeyMinAgeMs?: number; list?: Lister } = {},
 ): Promise<ReconcileReport> {
   const list = opts.list ?? listObjects;
   const minAge = opts.orphanMinAgeMs ?? DEFAULT_ORPHAN_MIN_AGE_MS;
@@ -89,6 +149,7 @@ export async function reconcileStorage(
   const report: ReconcileReport = {
     objects: objects.length,
     orphansQueued: orphans.length,
+    orphanKeysShredded: await shredOrphanKeys(opts.orphanKeyMinAgeMs),
     pendingTasks: queue.pending,
     deadTasks: queue.dead,
     stuckTasks: queue.stuck,

@@ -11,6 +11,7 @@ export const API_SCOPES = [
   "jd:write",
   "invitations:send",
   "submissions:read",
+  "submissions:write",
   "profile:read",
   "profile:write",
   "documents:read",
@@ -28,6 +29,7 @@ export const ORG_API_SCOPES = [
   "jd:write",
   "invitations:send",
   "submissions:read",
+  "submissions:write",
   "match:read",
 ] as const satisfies readonly ApiScope[];
 
@@ -52,10 +54,11 @@ export const CANDIDATE_READ_SCOPES = [
 export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   "reports:read": "Read recruiter reports",
   "roles:read": "List and read roles",
-  "roles:write": "Create roles",
-  "jd:write": "Upload job descriptions",
+  "roles:write": "Create roles and change their status",
+  "jd:write": "Upload job descriptions and NDAs",
   "invitations:send": "Send secure links (outbound email)",
   "submissions:read": "Export submission metadata",
+  "submissions:write": "Change application status",
   "profile:read": "Read discovery profile",
   "profile:write": "Change discovery profile",
   "documents:read": "Read career-document metadata",

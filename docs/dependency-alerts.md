@@ -1,12 +1,22 @@
 # Dependency alert register
 
-Every GitHub code-scanning (Trivy) alert raised against this repository, mapped to the version that resolved it or to an explicit unresolved status. Generated from the GitHub code-scanning API and the committed lockfiles on 14 October 2026. Alert states come from scans of the default branch; none were dismissed.
+Every GitHub code-scanning (Trivy) alert raised against this repository, mapped to the version that resolved it or to an explicit unresolved status. Generated from the GitHub code-scanning API and the committed lockfiles on 14 October 2026 and refreshed on 3 November 2026. Alert states come from scans of the default branch; none were dismissed.
 
 ## Unresolved
 
+No open GitHub code-scanning or Dependabot alerts as of 3 November 2026. `npm audit --omit=dev` reports 0 vulnerabilities for the app and `npm audit` reports 0 for `mcp/`.
+
+The full development audit still reports one advisory that has no compatible fix:
+
 | Advisory | Package | Path | Status |
 | --- | --- | --- | --- |
-| [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) (CVE-2026-93687), high | braces 3.0.3 | `package-lock.json` (development: eslint-config-next → fast-glob → micromatch) | No fixed version published. Not in the production image. Lint runs only on repository content. Tracked in [#36](https://github.com/jusso-dev/Recruvault/issues/36). Earlier Trivy runs used `ignore-unfixed`, so it never appeared as an alert; the report scan now includes unfixed and development findings. |
+| [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249), moderate | minimatch 3.1.5 | `package-lock.json` (development: eslint, eslint-plugin-react, eslint-plugin-import, eslint-plugin-jsx-a11y) | Fixed only in minimatch 11.0.1+, whose API is incompatible with the `require("minimatch")(...)` call used by these ESLint packages, and the latest releases of those plugins still require `^3.1.2`. Lint-only; not in the production image; patterns come from repository config. npm reports 15 packages along this one chain. Other minimatch/glob consumers are overridden to patched versions (see `SECURITY.md`). |
+
+### Withdrawn
+
+| Advisory | Package | Status |
+| --- | --- | --- |
+| [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) (CVE-2026-93687) | braces 3.0.3 | GitHub withdrew this advisory on 23 October 2026; alert #49 closed on 26 October 2026 without a dismissal. braces 3.0.3 remains the latest release and is still installed through `@next/eslint-plugin-next → fast-glob → micromatch`. No longer reported by `npm audit` or Trivy. |
 
 ## Resolved
 
@@ -60,5 +70,16 @@ Every GitHub code-scanning (Trivy) alert raised against this repository, mapped 
 | #46 | CVE-2026-94483 | medium | `package-lock.json` | next | 16.2.10 | 16.3.8 | 16.4.0 | 2026-10-14 |
 | #47 | GHSA-wq5f-xc86-pv6w | high | `package-lock.json` | sharp | 0.34.5 | 0.35.5 | 0.35.5 | 2026-10-14 |
 | #48 | CVE-2026-93749 | high | `package-lock.json` | source-map-js | 1.2.1 | 1.2.2 | 1.2.2 | 2026-10-14 |
+| #49 | CVE-2026-93687 | high | `package-lock.json` | braces | 3.0.3 | advisory withdrawn | 3.0.3 | 2026-10-26 |
+| #50 | CVE-2026-111181 | high | `mcp/package-lock.json` | body-parser | <2.3.0 | 2.3.0 | 2.3.0 | 2026-10-30 |
+| #51 | CVE-2023-54404 | high | `mcp/package-lock.json` | zod | 3.25.76 | 4.x | 4.6.7 | 2026-10-30 |
+| #52 | GHSA-2464-fhr4-w9xw | critical | `package-lock.json` | next | 16.4.0 | 16.4.2 | 16.4.4 | 2026-10-30 |
+| #53 | GHSA-673q-mjm6-r5xr | critical | `package-lock.json` | next | 16.4.0 | 16.4.2 | 16.4.4 | 2026-10-30 |
+| #54 | CVE-2026-94482 | high | `package-lock.json` | next | 16.4.0 | 16.4.2 | 16.4.4 | 2026-10-30 |
+| #55 | CVE-2026-109869 | high | `package-lock.json` | undici | <8.12 | 8.12.3 | 8.12.3 | 2026-10-30 |
+| #56 | CVE-2023-54404 | high | `package-lock.json` | zod | 3.x | 4.x | 4.6.7 | 2026-10-30 |
+| #57 | GHSA-2464-fhr4-w9xw | critical | app image `node_modules/next` | next | 16.4.0 | 16.4.2 | 16.4.4 | 2026-10-30 |
+| #58 | GHSA-673q-mjm6-r5xr | critical | app image `node_modules/next` | next | 16.4.0 | 16.4.2 | 16.4.4 | 2026-10-30 |
+| #59 | CVE-2026-94482 | high | app image `node_modules/next` | next | 16.4.0 | 16.4.2 | 16.4.4 | 2026-10-30 |
 
 To refresh this register, list alerts with `gh api --paginate repos/jusso-dev/Recruvault/code-scanning/alerts` and compare against `npm ls <package>` for both lockfiles. Do not dismiss an alert to make the register look clean.

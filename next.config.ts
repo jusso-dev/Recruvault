@@ -31,6 +31,13 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      // The secure-link response page embeds the job description from the
+      // authorised document view, so that one route may be framed by this
+      // origin. Later entries win.
+      {
+        source: "/api/documents/:id/view",
+        headers: [{ key: "X-Frame-Options", value: "SAMEORIGIN" }],
+      },
     ];
   },
 };

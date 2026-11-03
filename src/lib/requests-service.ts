@@ -9,10 +9,11 @@ import {
   discoveryProfiles,
   requestFields,
   requests,
+  submissions,
   suppressions,
   user,
 } from "@/db/schema";
-import type { OrgContext } from "@/lib/guards";
+import { AuthError, type OrgContext } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
 import { deliveryLinkToken } from "@/lib/link-token";
@@ -22,6 +23,11 @@ import {
   ROLE_REQUEST_FIELD_KEYS,
 } from "@/lib/fields";
 import { ApiError } from "@/lib/api/http";
+import { assertSubmissionAccess, canManageRequest } from "@/lib/review";
+import {
+  RECRUITER_APPLICATION_STATUSES,
+  type RecruiterApplicationStatus,
+} from "@/lib/application-status";
 import {
   EMPLOYMENT_TYPES,
   SALARY_PERIODS,
@@ -185,7 +191,7 @@ export async function sendRequestCore(
     .select()
     .from(requests)
     .where(and(eq(requests.id, requestId), eq(requests.orgId, ctx.orgId)));
-  if (!request) throw new ApiError(404, "Request not found.");
+  if (!request || !canManageRequest(ctx, request)) throw new ApiError(404, "Request not found.");
   if (request.status !== "open" && request.status !== "closing_soon") {
     throw new ApiError(409, "Only open requests can be sent.");
   }
@@ -310,4 +316,97 @@ export async function queueRequestDelivery(opts: {
   }
   await publishAfterCommit();
   return queued;
+}
+
+export const REQUEST_STATUSES = ["open", "closing_soon", "closed", "archived"] as const;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+type RequestStatus = (typeof REQUEST_STATUSES)[number];
+
+interface RequestMeta {
+  ip?: string | null;
+  userAgent?: string | null;
+}
+
+/** Change a role's status. Caller must already hold `requests:create`. */
+export async function setRequestStatusCore(
+  ctx: OrgContext,
+  requestId: string,
+  status: string,
+  meta: RequestMeta = {},
+): Promise<void> {
+  if (!REQUEST_STATUSES.includes(status as RequestStatus)) throw new ApiError(400, "Invalid status.");
+  const [request] = UUID.test(requestId)
+    ? await db
+        .select()
+        .from(requests)
+        .where(and(eq(requests.id, requestId), eq(requests.orgId, ctx.orgId)))
+    : [];
+  if (!request || !canManageRequest(ctx, request)) throw new ApiError(404, "Request not found.");
+  const reopening = status === "open" || status === "closing_soon";
+
+  await db
+    .update(requests)
+    .set({
+      status: status as RequestStatus,
+      // Purge-on-close counts from the first close: closing again or archiving
+      // keeps that time, and archiving an open role starts it. Reopening clears
+      // it, and a lapsed expiry with it, so neither can purge the reopened
+      // role's new applications from an earlier date.
+      closedAt: reopening ? null : (request.closedAt ?? new Date()),
+      ...(reopening && request.expiresAt && request.expiresAt < new Date() ? { expiresAt: null } : {}),
+    })
+    .where(eq(requests.id, request.id));
+
+  await audit({
+    orgId: ctx.orgId,
+    actorType: "org_user",
+    actorId: ctx.userId,
+    action: `request.status.${status}`,
+    targetType: "request",
+    targetId: request.id,
+    ...meta,
+  });
+}
+
+/**
+ * Move an application to a recruiter stage. Writing status is never broader
+ * than reading the submission: the review ownership/share gate applies.
+ */
+export async function setSubmissionStatusCore(
+  ctx: OrgContext,
+  submissionId: string,
+  status: string,
+  meta: RequestMeta = {},
+): Promise<{ requestId: string }> {
+  if (!RECRUITER_APPLICATION_STATUSES.includes(status as RecruiterApplicationStatus)) {
+    throw new ApiError(400, "Invalid status.");
+  }
+  if (!UUID.test(submissionId)) throw new ApiError(404, "Submission not found.");
+  let row: Awaited<ReturnType<typeof assertSubmissionAccess>>;
+  try {
+    row = await assertSubmissionAccess(ctx, submissionId);
+  } catch (err) {
+    if (err instanceof AuthError && /not found/i.test(err.message)) throw new ApiError(404, err.message);
+    throw err;
+  }
+  // A withdrawal is the applicant's decision and a purge is final; neither is
+  // undone by a pipeline status change.
+  if (row.submission.purgedAt) throw new ApiError(409, "This application has been deleted.");
+  if (row.submission.status === "withdrawn") throw new ApiError(409, "This application was withdrawn.");
+
+  await db
+    .update(submissions)
+    .set({ status: status as RecruiterApplicationStatus, updatedAt: new Date() })
+    .where(eq(submissions.id, row.submission.id));
+
+  await audit({
+    orgId: ctx.orgId,
+    actorType: "org_user",
+    actorId: ctx.userId,
+    action: `submission.status.${status}`,
+    targetType: "submission",
+    targetId: row.submission.id,
+    ...meta,
+  });
+  return { requestId: row.request.id };
 }

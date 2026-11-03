@@ -38,6 +38,20 @@ export async function isPlatformBootstrapped(): Promise<boolean> {
   return true;
 }
 
+/**
+ * The organisation whose owner completed platform setup. Platform-wide
+ * controls (backups dump every tenant) belong to it, not to every tenant
+ * owner. Null before setup or if that owner no longer has a membership.
+ */
+export async function platformOrganisationId(): Promise<string | null> {
+  const [row] = await db
+    .select({ orgId: memberships.orgId })
+    .from(platformBootstrap)
+    .innerJoin(memberships, eq(memberships.userId, platformBootstrap.consumedByUserId))
+    .where(and(eq(platformBootstrap.id, "platform"), isNotNull(platformBootstrap.consumedAt)));
+  return row?.orgId ?? null;
+}
+
 /** Test hook: forget the cached completion state. */
 export function resetBootstrapCache() {
   completed = false;

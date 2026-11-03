@@ -9,6 +9,7 @@ import {
   dataKeys,
   deletionTasks,
   discoveryProfiles,
+  documentMigrations,
   documents,
   auditEvents,
   erasureRecords,
@@ -317,6 +318,60 @@ describe("reconciler", () => {
   });
 });
 
+describe("orphan key reconciliation", () => {
+  it("shreds day-old document and draft keys that nothing references, and nothing else", async () => {
+    const org = await createOrgWithVault(db);
+    const link = await createRequestWithLink(db, org);
+    const submissionId = await createSubmission(db, link);
+    const kept = await storeEvidence(org, link, submissionId);
+    const sealed = (purpose: string) =>
+      crypto.createDataKey(db, {
+        mode: "sealed",
+        recipientPublicKey: org.vault!.publicKey,
+        ownerType: "organisation",
+        ownerId: org.orgId,
+        purpose,
+        keyVersion: org.vault!.version,
+      });
+    const draftKey = () =>
+      crypto.createDataKey(db, { mode: "link", linkSecret: "synthetic", purpose: "draft", linkId: link.accessTokenId });
+
+    const orphanDocument = (await sealed("evidence")).dekId;
+    const orphanJd = (await sealed("jd")).dekId;
+    const orphanDraft = (await draftKey()).dekId;
+    const youngOrphan = (await sealed("evidence")).dekId;
+    const submissionKey = (await sealed("submission")).dekId;
+    const migrating = (await sealed("evidence")).dekId;
+    await db.insert(documentMigrations).values({
+      tableName: "documents",
+      documentId: randomUUID(),
+      oldStorageKey: `legacy/${randomUUID()}`,
+      newStorageKey: `org/${org.orgId}/${randomUUID()}`,
+      dekId: migrating,
+      state: "uploading",
+    });
+    const liveDraft = await draftKey();
+    const draftSubmission = await createSubmission(db, link, { status: "started" });
+    await db.insert(submissionValues).values({
+      submissionId: draftSubmission,
+      fieldId: link.textFieldId,
+      valueEncrypted: await crypto.encryptFieldWithKey("kept draft", liveDraft.dek),
+      dekId: liveDraft.dekId,
+    });
+
+    const old = [orphanDocument, orphanJd, orphanDraft, submissionKey, migrating, liveDraft.dekId, kept.dekId];
+    await db.update(dataKeys).set({ createdAt: new Date(Date.now() - 2 * DAY) }).where(inArray(dataKeys.id, old));
+
+    const report = await reconciler.reconcileStorage();
+    expect(report.orphanKeysShredded).toBe(3);
+    for (const id of [orphanDocument, orphanJd, orphanDraft]) expect(await isShredded(id), id).toBe(true);
+    for (const id of [youngOrphan, submissionKey, migrating, liveDraft.dekId, kept.dekId]) {
+      expect(await isShredded(id), id).toBe(false);
+    }
+    expect((await reconciler.reconcileStorage()).orphanKeysShredded).toBe(0);
+  });
+});
+
 describe("account erasure", () => {
   async function seekerWithEverything() {
     const auth = authModule.auth;
@@ -569,6 +624,10 @@ describe("retention policy branches", () => {
     expected.add(await createSubmission(db, closedLong, { submittedAt: ago(40) }));
     const closedRecent = await createRequestWithLink(db, poc, { status: "closed", closedAt: ago(2) });
     notExpected.add(await createSubmission(db, closedRecent, { submittedAt: ago(40) }));
+    // A role reopened after an old close keeps its new applications (legacy rows
+    // may still carry the earlier closedAt; only closed or archived roles count it).
+    const reopened = await createRequestWithLink(db, poc, { status: "open", closedAt: ago(11) });
+    notExpected.add(await createSubmission(db, reopened, { submittedAt: ago(1) }));
     const expired = await createRequestWithLink(db, poc, { expiresAt: ago(11) });
     expected.add(await createSubmission(db, expired, { submittedAt: ago(20) }));
     const openFresh = await createRequestWithLink(db, poc);
@@ -618,5 +677,27 @@ describe("retention policy branches", () => {
     expect((await db.select().from(submissions).where(eq(submissions.id, expiredDraft)))[0].purgedAt).not.toBeNull();
     expect(await isShredded(draftValue.dekId)).toBe(true);
     expect(await db.select().from(submissionValues).where(eq(submissionValues.submissionId, expiredDraft))).toHaveLength(0);
+  });
+});
+
+describe("expected purge date shown to job seekers", () => {
+  it("mirrors the purge policy, including reopened roles", () => {
+    const DAY = 86_400_000;
+    const at = (days: number) => new Date(Date.UTC(2026, 0, 1) + days * DAY);
+    const submitted = { submittedAt: at(0) };
+    const open = { status: "open", closedAt: null, expiresAt: null };
+
+    expect(retention.expectedPurgeDate({ retentionDays: 30, purgeOnClose: false }, open, submitted)).toEqual(at(30));
+    expect(
+      retention.expectedPurgeDate({ retentionDays: 30, purgeOnClose: true }, { ...open, status: "closed", closedAt: at(5) }, submitted),
+    ).toEqual(at(35));
+    // A reopened role's old close time does not count; the backstop applies.
+    expect(
+      retention.expectedPurgeDate({ retentionDays: 30, purgeOnClose: true }, { ...open, closedAt: at(5) }, submitted),
+    ).toEqual(at(30 + retention.OPEN_ROLE_BACKSTOP_DAYS));
+    expect(
+      retention.expectedPurgeDate({ retentionDays: 30, purgeOnClose: true }, { ...open, expiresAt: at(10) }, submitted),
+    ).toEqual(at(40));
+    expect(retention.expectedPurgeDate({ retentionDays: 30, purgeOnClose: false }, open, { submittedAt: null })).toBeNull();
   });
 });
