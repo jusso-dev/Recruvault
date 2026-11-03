@@ -47,5 +47,6 @@ function copyPackage(name, parent = source, optional = false) {
 }
 
 // Drizzle's database driver is an optional peer, so include it explicitly.
-for (const name of ["drizzle-kit", "tsx", "drizzle-orm", "pg"]) copyPackage(name);
+// pino backs the logger that src/db attaches to the pool.
+for (const name of ["drizzle-kit", "tsx", "drizzle-orm", "pg", "pino"]) copyPackage(name);
 console.log(`Packaged ${visited.size} installed migration-tool dependencies.`);

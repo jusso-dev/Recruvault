@@ -33,11 +33,16 @@ function check(name, ok) {
 function start(extraEnv = {}) {
   const child = spawn(process.execPath, [server], {
     env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), HOSTNAME: "127.0.0.1", ...extraEnv },
-    stdio: ["ignore", "ignore", "ignore"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  // Kept in memory for matching only, never printed: it can hold env values.
+  let output = "";
+  const keep = (chunk) => (output = (output + chunk).slice(-65_536));
+  child.stdout.on("data", keep);
+  child.stderr.on("data", keep);
   let exited = false;
-  child.on("exit", () => (exited = true));
-  return { child, exited: () => exited };
+  const exit = new Promise((r) => child.once("exit", () => r((exited = true))));
+  return { child, exited: () => exited, exit, output: () => output };
 }
 
 async function live(timeoutMs) {
@@ -55,9 +60,8 @@ async function live(timeoutMs) {
 }
 
 async function stop(proc) {
-  if (proc.exited()) return;
-  proc.child.kill("SIGTERM");
-  await new Promise((r) => proc.child.once("exit", r));
+  if (!proc.exited()) proc.child.kill("SIGTERM");
+  await proc.exit;
 }
 
 const nonceOf = (csp) => /'nonce-([^']+)'/.exec(csp ?? "")?.[1] ?? "";
@@ -182,14 +186,17 @@ try {
   await stop(main);
 }
 
-for (const [name, env] of [
-  ["PLAYWRIGHT_TEST=1 refuses to start", { PLAYWRIGHT_TEST: "1" }],
-  ["SCAN_DISABLED=true refuses to start", { SCAN_DISABLED: "true" }],
-  ["INNGEST_DEV refuses to start", { INNGEST_DEV: "1" }],
+// Each must never serve and must report its own validation error, so a crash
+// for another reason does not pass.
+for (const [name, variable, env] of [
+  ["PLAYWRIGHT_TEST=1 refuses to start", "PLAYWRIGHT_TEST", { PLAYWRIGHT_TEST: "1" }],
+  ["SCAN_DISABLED=true refuses to start", "SCAN_DISABLED", { SCAN_DISABLED: "true" }],
+  ["INNGEST_DEV refuses to start", "INNGEST_DEV", { INNGEST_DEV: "1" }],
 ]) {
   const proc = start(env);
   try {
-    check(name, !(await live(20_000)));
+    const neverLive = !(await live(20_000));
+    check(name, neverLive && proc.output().includes(`${variable}: ${variable} must not`));
   } finally {
     await stop(proc);
   }
