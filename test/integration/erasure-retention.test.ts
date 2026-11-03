@@ -569,6 +569,10 @@ describe("retention policy branches", () => {
     expected.add(await createSubmission(db, closedLong, { submittedAt: ago(40) }));
     const closedRecent = await createRequestWithLink(db, poc, { status: "closed", closedAt: ago(2) });
     notExpected.add(await createSubmission(db, closedRecent, { submittedAt: ago(40) }));
+    // A role reopened after an old close keeps its new applications (legacy rows
+    // may still carry the earlier closedAt; only closed or archived roles count it).
+    const reopened = await createRequestWithLink(db, poc, { status: "open", closedAt: ago(11) });
+    notExpected.add(await createSubmission(db, reopened, { submittedAt: ago(1) }));
     const expired = await createRequestWithLink(db, poc, { expiresAt: ago(11) });
     expected.add(await createSubmission(db, expired, { submittedAt: ago(20) }));
     const openFresh = await createRequestWithLink(db, poc);
@@ -618,5 +622,27 @@ describe("retention policy branches", () => {
     expect((await db.select().from(submissions).where(eq(submissions.id, expiredDraft)))[0].purgedAt).not.toBeNull();
     expect(await isShredded(draftValue.dekId)).toBe(true);
     expect(await db.select().from(submissionValues).where(eq(submissionValues.submissionId, expiredDraft))).toHaveLength(0);
+  });
+});
+
+describe("expected purge date shown to job seekers", () => {
+  it("mirrors the purge policy, including reopened roles", () => {
+    const DAY = 86_400_000;
+    const at = (days: number) => new Date(Date.UTC(2026, 0, 1) + days * DAY);
+    const submitted = { submittedAt: at(0) };
+    const open = { status: "open", closedAt: null, expiresAt: null };
+
+    expect(retention.expectedPurgeDate({ retentionDays: 30, purgeOnClose: false }, open, submitted)).toEqual(at(30));
+    expect(
+      retention.expectedPurgeDate({ retentionDays: 30, purgeOnClose: true }, { ...open, status: "closed", closedAt: at(5) }, submitted),
+    ).toEqual(at(35));
+    // A reopened role's old close time does not count; the backstop applies.
+    expect(
+      retention.expectedPurgeDate({ retentionDays: 30, purgeOnClose: true }, { ...open, closedAt: at(5) }, submitted),
+    ).toEqual(at(30 + retention.OPEN_ROLE_BACKSTOP_DAYS));
+    expect(
+      retention.expectedPurgeDate({ retentionDays: 30, purgeOnClose: true }, { ...open, expiresAt: at(10) }, submitted),
+    ).toEqual(at(40));
+    expect(retention.expectedPurgeDate({ retentionDays: 30, purgeOnClose: false }, open, { submittedAt: null })).toBeNull();
   });
 });

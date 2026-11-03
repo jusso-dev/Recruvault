@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
-import { memberships, organisations, platformBootstrap, user, vaultKeys } from "@/db/schema";
+import { linkRateLimits, memberships, organisations, platformBootstrap, user, vaultKeys } from "@/db/schema";
 import { setupMigratedDatabase } from "./harness";
 import { asBrowser, authRequest, newBrowser, signUpVerified, type Browser } from "./request-context";
 
@@ -191,5 +191,84 @@ describe("first-owner bootstrap", () => {
     expect(await bootstrap.isPlatformBootstrapped()).toBe(true);
     const [row] = await db.select().from(platformBootstrap);
     expect(row.consumedAt).not.toBeNull();
+  });
+});
+
+describe("first-owner bootstrap recovery from mistakes", () => {
+  async function freshInstall() {
+    await db.execute(sql`truncate platform_bootstrap, organisations, vault_keys, link_rate_limits cascade`);
+    bootstrap.resetBootstrapCache();
+    expect(await bootstrap.isPlatformBootstrapped()).toBe(false);
+  }
+
+  async function globalCount() {
+    const [row] = await db.select().from(linkRateLimits).where(eq(linkRateLimits.key, "bootstrap:global"));
+    return row?.count ?? 0;
+  }
+
+  it("rejects bad keys without writing anything, then accepts a corrected key", async () => {
+    await freshInstall();
+    const owner = await verifiedBrowser("retry-owner@example.invalid");
+    const weakKey = Buffer.alloc(32, 7).toString("base64url");
+    const attempts: [Record<string, string>, RegExp][] = [
+      [{ encryptionKeyConfirm: KEY.replace(/c$/, "d") }, /twice, exactly/],
+      [{ encryptionKey: weakKey, encryptionKeyConfirm: weakKey }, /not random enough/],
+      [{ keyMode: "passphrase", passphrase: "too-short", passphraseConfirm: "too-short" }, /at least 12/],
+    ];
+    for (const [overrides, error] of attempts) {
+      const result = await asBrowser(owner, () => setup.completePlatformSetup(setupForm(overrides)));
+      expect(result).toMatchObject({ ok: false, error: expect.stringMatching(error) });
+      expect(await db.select().from(organisations)).toHaveLength(0);
+      expect(await db.select().from(vaultKeys)).toHaveLength(0);
+      expect(await db.select().from(platformBootstrap)).toHaveLength(0);
+    }
+
+    // The retry still uses the setup token; no recovery token is needed.
+    const retried = await asBrowser(owner, () => setup.completePlatformSetup(setupForm()));
+    expect(retried.ok).toBe(true);
+    expect(await db.select().from(organisations)).toHaveLength(1);
+    expect(await bootstrap.isPlatformBootstrapped()).toBe(true);
+  });
+
+  it("never blocks the operator token on the deployment-wide budget", async () => {
+    await freshInstall();
+    // Simulate a guessing campaign that exhausted the global budget.
+    await db.insert(linkRateLimits).values({ key: "bootstrap:global", count: 1000 });
+
+    const guesser = await verifiedBrowser("guesser@example.invalid");
+    const wrong = await asBrowser(guesser, () =>
+      setup.completePlatformSetup(setupForm({ bootstrapToken: TOKEN.replace(/f$/, "e") })),
+    );
+    expect(wrong).toMatchObject({ ok: false, error: expect.stringMatching(/Too many setup attempts/) });
+
+    const operator = await verifiedBrowser("operator@example.invalid");
+    const before = await globalCount();
+    const badKey = await asBrowser(operator, () =>
+      setup.completePlatformSetup(setupForm({ encryptionKeyConfirm: "mismatch" })),
+    );
+    expect(badKey).toMatchObject({ ok: false, error: expect.stringMatching(/twice, exactly/) });
+    const done = await asBrowser(operator, () => setup.completePlatformSetup(setupForm()));
+    expect(done.ok).toBe(true);
+    expect(await globalCount()).toBe(before);
+  });
+
+  it("charges the global budget only for wrong tokens that pass the per-client check", async () => {
+    await freshInstall();
+    const client = await verifiedBrowser("throttled@example.invalid");
+    const wrongToken = setupForm({ bootstrapToken: TOKEN.replace(/f$/, "e") });
+    for (let i = 0; i < 5; i += 1) {
+      const result = await asBrowser(client, () => setup.completePlatformSetup(wrongToken));
+      expect(result).toMatchObject({ ok: false, error: "The bootstrap token is not valid." });
+    }
+    expect(await globalCount()).toBe(5);
+
+    // Per-client budget exhausted: rejected without drawing on the global budget,
+    // and a correct token from the same client is still subject to it.
+    const blocked = await asBrowser(client, () => setup.completePlatformSetup(wrongToken));
+    expect(blocked).toMatchObject({ ok: false, error: expect.stringMatching(/Too many setup attempts/) });
+    const blockedCorrect = await asBrowser(client, () => setup.completePlatformSetup(setupForm()));
+    expect(blockedCorrect).toMatchObject({ ok: false, error: expect.stringMatching(/Too many setup attempts/) });
+    expect(await globalCount()).toBe(5);
+    expect(await db.select().from(organisations)).toHaveLength(0);
   });
 });
