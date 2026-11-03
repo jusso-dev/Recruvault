@@ -33,7 +33,7 @@ COPY --from=migration-deps /runtime-tools/node_modules ./node_modules
 COPY package.json drizzle.config.ts tsconfig.json ./
 COPY drizzle ./drizzle
 COPY src/db ./src/db
-COPY src/lib/fields.ts ./src/lib/fields.ts
+COPY src/lib/fields.ts src/lib/logger.ts src/lib/redact.ts ./src/lib/
 USER app
 CMD ["sh", "-ec", "node node_modules/drizzle-kit/bin.cjs migrate && node node_modules/tsx/dist/cli.mjs src/db/seed.ts"]
 
