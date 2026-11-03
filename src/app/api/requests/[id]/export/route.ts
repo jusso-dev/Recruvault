@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { requestFields, requests, submissions, submissionValues } from "@/db/schema";
-import { requireOrgUser, requestMeta, AuthError } from "@/lib/guards";
+import { requireOrgUser, requireUnlockedOrg, requestMeta, AuthError } from "@/lib/guards";
 import { createDekCache, decryptFieldWithKey } from "@/lib/crypto";
 import { audit } from "@/lib/audit";
 import { can } from "@/lib/rbac";
@@ -22,6 +22,17 @@ export async function GET(
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: 403 });
+    }
+    throw err;
+  }
+  // Decrypting needs this session's customer key: a locked vault is a state
+  // the user can fix, not a server error.
+  let crk: Buffer;
+  try {
+    ({ crk } = await requireUnlockedOrg("export:data"));
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: 409 });
     }
     throw err;
   }
@@ -47,10 +58,18 @@ export async function GET(
     .orderBy(requestFields.sortOrder);
   const textFields = fields.filter((f) => f.type !== "file_upload");
 
+  // Drafts are excluded: their values are wrapped for the responder's link
+  // only, and they are not applications until submitted.
   const subs = await db
     .select()
     .from(submissions)
-    .where(and(eq(submissions.requestId, id), isNull(submissions.purgedAt)));
+    .where(
+      and(
+        eq(submissions.requestId, id),
+        isNull(submissions.purgedAt),
+        ne(submissions.status, "started"),
+      ),
+    );
 
   // Batch-load all values in one query and reuse each submission's DEK.
   const allValues = subs.length
@@ -66,7 +85,7 @@ export async function GET(
     valuesBySubmission.set(v.submissionId, list);
   }
 
-  const dekCache = createDekCache();
+  const dekCache = createDekCache({ crk });
   const rows: Record<string, string>[] = [];
   for (const sub of subs) {
     const values = valuesBySubmission.get(sub.id) ?? [];

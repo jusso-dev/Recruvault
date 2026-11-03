@@ -3,12 +3,15 @@ import { db } from "@/db";
 import {
   discoveryProfiles,
   organisations,
+  requests,
+  submissions,
   walletItems,
   walletShares,
 } from "@/db/schema";
 import { requireCandidate } from "@/lib/guards";
 import { decryptField } from "@/lib/crypto";
 import { WALLET_ITEM_TYPES } from "@/lib/fields";
+import { expectedPurgeDate } from "@/lib/retention";
 import {
   deleteWalletItem,
   requestErasure,
@@ -45,15 +48,27 @@ export default async function WalletPage() {
     })),
   );
 
-  const shares = await db
+  const shareRows = await db
     .select({
       share: walletShares,
-      orgName: organisations.name,
+      org: organisations,
+      request: requests,
+      submission: submissions,
     })
     .from(walletShares)
     .innerJoin(organisations, eq(organisations.id, walletShares.orgId))
+    .innerJoin(submissions, eq(submissions.id, walletShares.submissionId))
+    .innerJoin(requests, eq(requests.id, submissions.requestId))
     .where(eq(walletShares.candidateAccountId, ctx.candidateAccountId))
     .orderBy(desc(walletShares.consentedAt));
+  // Withdrawing does not delete the organisation's copy: it stays until the
+  // organisation's retention policy purges the submission.
+  const shares = shareRows.map(({ share, org, request, submission }) => ({
+    share,
+    orgName: org.name,
+    purged: !!submission.purgedAt,
+    keptUntil: expectedPurgeDate(org, request, submission),
+  }));
 
   const missingTypes = WALLET_ITEM_TYPES.filter(
     (t) => !items.some((i) => i.type === t.type),
@@ -187,25 +202,38 @@ export default async function WalletPage() {
           <CardTitle>Sharing history</CardTitle>
         </CardHeader>
         <CardContent>
+          <p className="mb-3 text-sm leading-6 text-stone-600">
+            A shared application is a copy held by that organisation. Marking a share as
+            withdrawn records that you withdrew it; it does not delete the organisation&apos;s
+            copy, which stays until its retention policy deletes it. To have it removed sooner,
+            ask the organisation directly.
+          </p>
           {shares.length === 0 ? (
             <p className="text-sm text-stone-500">
               You haven&apos;t shared anything from your wallet yet.
             </p>
           ) : (
             <ul className="divide-y divide-stone-100">
-              {shares.map(({ share, orgName }) => (
+              {shares.map(({ share, orgName, purged, keptUntil }) => (
                 <li key={share.id} className="flex flex-col justify-between gap-3 py-3 text-sm sm:flex-row sm:items-center">
                   <span className="text-stone-600">
                     Shared with <span className="font-medium">{orgName}</span> on{" "}
                     {share.consentedAt.toLocaleDateString("en-AU")}
+                    <span className="block text-xs text-stone-500">
+                      {purged
+                        ? `${orgName} has deleted its copy.`
+                        : keptUntil
+                          ? `${orgName} keeps its copy until about ${keptUntil.toLocaleDateString("en-AU")}, under its retention policy.`
+                          : `${orgName} keeps its copy until its retention policy deletes it.`}
+                    </span>
                   </span>
                   {share.revokedAt ? (
-                    <Badge variant="red">future use revoked</Badge>
+                    <Badge variant="red">withdrawn</Badge>
                   ) : (
-                    <ActionForm action={revokeWalletShare} successMessage="Future access revoked.">
+                    <ActionForm action={revokeWalletShare} successMessage="Marked as withdrawn.">
                       <input type="hidden" name="id" value={share.id} />
                       <Button type="submit" variant="ghost" size="sm">
-                        Revoke future use
+                        Mark as withdrawn
                       </Button>
                     </ActionForm>
                   )}

@@ -13,10 +13,10 @@ import {
   requests,
   requestTemplates,
   submissionShares,
-  submissions,
   suppressions,
 } from "@/db/schema";
-import { requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "@/lib/guards";
+import { AuthError, requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "@/lib/guards";
+import { assertSubmissionAccess } from "@/lib/review";
 import { audit } from "@/lib/audit";
 import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
 import { queueRequestDelivery } from "@/lib/requests-service";
@@ -402,7 +402,14 @@ export async function setRequestStatus(formData: FormData): Promise<ActionResult
     .update(requests)
     .set({
       status: status as "open" | "closing_soon" | "closed" | "archived",
-      closedAt: status === "closed" ? new Date() : request.closedAt,
+      // Reopening clears the close time so purge-on-close retention cannot
+      // count a reopened role's new applications from the earlier close.
+      closedAt:
+        status === "closed"
+          ? new Date()
+          : status === "open" || status === "closing_soon"
+            ? null
+            : request.closedAt,
     })
     .where(eq(requests.id, requestId));
 
@@ -427,18 +434,24 @@ export async function shareSubmission(formData: FormData): Promise<ActionResult>
   const submissionId = String(formData.get("submissionId") ?? "");
   const userId = String(formData.get("userId") ?? "");
 
-  const [sub] = await db
-    .select({ id: submissions.id, orgId: requests.orgId })
-    .from(submissions)
-    .innerJoin(requests, eq(requests.id, submissions.requestId))
-    .where(and(eq(submissions.id, submissionId), eq(requests.orgId, ctx.orgId)));
-  if (!sub) return { ok: false, error: "Submission not found." };
+  // The caller must be able to review the submission themselves: sharing is
+  // never a way to grant access the caller does not hold.
+  try {
+    await assertSubmissionAccess(ctx, submissionId);
+  } catch (err) {
+    if (err instanceof AuthError) return { ok: false, error: err.message };
+    throw err;
+  }
+  if (userId === ctx.userId) return { ok: false, error: "Choose a reviewer other than yourself." };
 
   const [member] = await db
     .select()
     .from(memberships)
     .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.userId, userId)));
   if (!member) return { ok: false, error: "That user is not a member of your organisation." };
+  // Shares grant the reviewer role's shared-only read. Other roles already
+  // have their own access rules, so a share must not widen them.
+  if (member.role !== "reviewer") return { ok: false, error: "Submissions can only be shared with reviewers." };
 
   await db
     .insert(submissionShares)

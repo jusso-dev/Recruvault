@@ -9,7 +9,7 @@ import { tokenMatches } from "@/lib/crypto";
 import { getSession, requestMeta } from "@/lib/guards";
 import { BOOTSTRAP_LOCK } from "@/lib/platform-bootstrap";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { readEnrollmentKey, readUnlockKey } from "@/lib/vault-enrollment";
+import { readEnrollmentKey, readUnlockKey, type EnrolledKeyMaterial } from "@/lib/vault-enrollment";
 import { activeVault, insertVaultKey } from "@/lib/vault-store";
 import { establishVaultUnlock } from "@/lib/vault-session";
 import { verifierMatches } from "@/lib/vault-crypto";
@@ -23,18 +23,33 @@ function organisationSlug(name: string): string {
   return `${base || "organisation"}-${suffix}`;
 }
 
-/**
- * Throttle per client and globally: x-forwarded-for can be rotated, so a
- * deployment-wide budget caps total guesses regardless of claimed source.
- */
-async function attemptAllowed(ip: string | null) {
-  const perClient = await checkRateLimit(`bootstrap:${ip || "unknown"}`, 5, WINDOW_MS);
-  const global = await checkRateLimit("bootstrap:global", 30, WINDOW_MS);
-  return perClient && global;
-}
-
 function capabilityOk(presented: string, expected: string | undefined) {
   return Boolean(expected && expected.length >= 32 && presented && tokenMatches(presented, expected));
+}
+
+/**
+ * Throttle per client and globally: x-forwarded-for can be rotated, so a
+ * deployment-wide budget caps wrong guesses regardless of claimed source.
+ * Only a wrong token that passed the per-client check is charged globally,
+ * and an operator token is never blocked by the global budget, so guessing
+ * cannot lock the operator out.
+ */
+async function attemptAllowed(ip: string | null, presented: string) {
+  if (!(await checkRateLimit(`bootstrap:${ip || "unknown"}`, 5, WINDOW_MS))) return false;
+  if (
+    capabilityOk(presented, process.env.BOOTSTRAP_TOKEN) ||
+    capabilityOk(presented, process.env.BOOTSTRAP_RECOVERY_TOKEN)
+  ) {
+    return true;
+  }
+  return checkRateLimit("bootstrap:global", 30, WINDOW_MS);
+}
+
+/** Thrown inside the setup transaction so every rejection rolls back. */
+class SetupRejected extends Error {}
+
+function reject(error: string): never {
+  throw new SetupRejected(error);
 }
 
 /**
@@ -58,13 +73,26 @@ export async function completePlatformSetup(formData: FormData): Promise<ActionR
   if (!presented) return { ok: false, error: "Enter the bootstrap token." };
 
   const meta = await requestMeta();
-  if (!(await attemptAllowed(meta.ip))) return { ok: false, error: "Too many setup attempts. Wait and try again." };
+  if (!(await attemptAllowed(meta.ip, presented))) {
+    return { ok: false, error: "Too many setup attempts. Wait and try again." };
+  }
+
+  // A fresh install needs a name and a new key. Validate both before any
+  // write so a mistyped key never leaves an ownerless organisation behind.
+  const [preexisting] = await db.select({ id: organisations.id }).from(organisations).limit(1);
+  let enrollment: EnrolledKeyMaterial | null = null;
+  if (!preexisting) {
+    if (!organisationName) return { ok: false, error: "Enter your organisation name." };
+    const material = readEnrollmentKey(formData);
+    if (!material.ok) return { ok: false, error: material.error };
+    enrollment = material.material;
+  }
 
   type Outcome =
     | { kind: "done"; organisationId: string; vaultKeyId: string; crk: Buffer }
     | { kind: "error"; error: string };
 
-  const result: Outcome = await db.transaction(async (tx) => {
+  const run = () => db.transaction(async (tx): Promise<Outcome> => {
     await tx.execute(sql`select pg_advisory_xact_lock(${BOOTSTRAP_LOCK})`);
     const [consumed] = await tx
       .select({ id: platformBootstrap.id })
@@ -75,14 +103,14 @@ export async function completePlatformSetup(formData: FormData): Promise<ActionR
       .from(memberships)
       .where(eq(memberships.role, "owner"))
       .limit(1);
-    if (consumed || owner) return { kind: "error", error: "Recruvault has already been set up. Sign in instead." };
+    if (consumed || owner) reject("Recruvault has already been set up. Sign in instead.");
 
     // An organisation without an owner means an interrupted earlier install;
     // only the separate operator recovery token may adopt it.
     const [organisation] = await tx.select({ id: organisations.id }).from(organisations).limit(1);
     const expected = organisation ? process.env.BOOTSTRAP_RECOVERY_TOKEN : process.env.BOOTSTRAP_TOKEN;
-    if (!capabilityOk(presented, expected)) return { kind: "error", error: "The bootstrap token is not valid." };
-    if (!organisation && !organisationName) return { kind: "error", error: "Enter your organisation name." };
+    if (!capabilityOk(presented, expected)) reject("The bootstrap token is not valid.");
+    if (!organisation && !enrollment) reject("Setup changed while you were submitting. Try again.");
 
     const [membership] = await tx
       .select({ id: memberships.id })
@@ -92,9 +120,7 @@ export async function completePlatformSetup(formData: FormData): Promise<ActionR
       .select({ id: candidateAccounts.id })
       .from(candidateAccounts)
       .where(eq(candidateAccounts.userId, session.user.id));
-    if (membership || candidate) {
-      return { kind: "error", error: "Use a new account for the first owner." };
-    }
+    if (membership || candidate) reject("Use a new account for the first owner.");
 
     const organisationId = organisation
       ? organisation.id
@@ -113,23 +139,27 @@ export async function completePlatformSetup(formData: FormData): Promise<ActionR
     if (existingVault) {
       const key = readUnlockKey(formData, existingVault);
       if (!key.ok || !verifierMatches(key.crk, "organisation", organisationId, existingVault.verifier)) {
-        return { kind: "error", error: "Enter the organisation's existing encryption key." };
+        reject("Enter the organisation's existing encryption key.");
       }
       vaultKeyId = existingVault.id;
       crk = key.crk;
     } else {
-      const material = readEnrollmentKey(formData);
-      if (!material.ok) return { kind: "error", error: material.error };
+      let material = enrollment;
+      if (!material) {
+        const read = readEnrollmentKey(formData);
+        if (!read.ok) reject(read.error);
+        material = read.material;
+      }
       const vault = await insertVaultKey(tx, {
         ownerType: "organisation",
         ownerId: organisationId,
-        crk: material.material.crk,
-        kdf: material.material.kdf,
-        kdfSalt: material.material.kdfSalt,
-        kdfParams: material.material.kdfParams,
+        crk: material.crk,
+        kdf: material.kdf,
+        kdfSalt: material.kdfSalt,
+        kdfParams: material.kdfParams,
       });
       vaultKeyId = vault.id;
-      crk = material.material.crk;
+      crk = material.crk;
     }
 
     await tx
@@ -155,6 +185,14 @@ export async function completePlatformSetup(formData: FormData): Promise<ActionR
       });
     return { kind: "done", organisationId, vaultKeyId, crk };
   });
+
+  let result: Outcome;
+  try {
+    result = await run();
+  } catch (error) {
+    if (!(error instanceof SetupRejected)) throw error;
+    result = { kind: "error", error: error.message };
+  }
 
   if (result.kind === "error") {
     await audit({

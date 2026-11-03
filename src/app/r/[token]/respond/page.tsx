@@ -108,7 +108,7 @@ export default async function RespondPage({
   }
 
   // A previously saved draft (structured answers) for this link, if any.
-  const draft = await loadDraftValues(at.id);
+  const { values: draft, restoreFailed: draftLost } = await loadDraftValues(at.id);
   const hasDraft = Object.keys(draft).length > 0;
 
   const jd = request.jdDocumentId
@@ -212,6 +212,13 @@ export default async function RespondPage({
               <p className="rounded-lg border border-accent-tint-border bg-accent-tint p-3 text-sm text-accent">
                 We restored your saved draft. Review your answers, re-attach any files,
                 then submit.
+              </p>
+            )}
+            {draftLost && (
+              <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                Your saved draft couldn&apos;t be restored in this browser, so it was discarded.
+                Drafts can only be reopened in the browser that saved them. Please fill in your
+                answers again.
               </p>
             )}
             {isCandidate && prefill.size > 0 && (

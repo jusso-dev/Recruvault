@@ -165,6 +165,33 @@ export async function purgeSubmission(submissionId: string, actor: Actor): Promi
 }
 
 /**
+ * The date the scheduled purge will remove a submission under the
+ * organisation's current policy, mirroring findPurgeDueSubmissionIds. Null
+ * when no date is known yet (for example a draft, or an open role without an
+ * expiry under purge-on-close before its backstop applies).
+ */
+export function expectedPurgeDate(
+  org: { retentionDays: number; purgeOnClose: boolean },
+  request: { status: string; closedAt: Date | null; expiresAt: Date | null },
+  submission: { submittedAt: Date | null },
+): Date | null {
+  const after = (from: Date, days: number) => new Date(from.getTime() + days * DAY_MS);
+  if (!org.purgeOnClose) {
+    return submission.submittedAt ? after(submission.submittedAt, org.retentionDays) : null;
+  }
+  const dates: Date[] = [];
+  if (request.closedAt && ["closed", "archived"].includes(request.status)) {
+    dates.push(after(request.closedAt, org.retentionDays));
+  }
+  if (!request.closedAt && request.expiresAt) dates.push(after(request.expiresAt, org.retentionDays));
+  if (submission.submittedAt) {
+    dates.push(after(submission.submittedAt, org.retentionDays + OPEN_ROLE_BACKSTOP_DAYS));
+  }
+  if (dates.length === 0) return null;
+  return new Date(Math.min(...dates.map((date) => date.getTime())));
+}
+
+/**
  * Select submission ids due for purge across all organisations, per each org's
  * retention policy. The scheduled job fans these out so a single poisoned
  * submission can't abort the rest of the run.
@@ -195,7 +222,7 @@ export async function findPurgeDueSubmissionIds(now = new Date()): Promise<strin
           isNull(submissions.purgedAt),
           org.purgeOnClose
             ? or(
-                lt(requests.closedAt, cutoff),
+                and(inArray(requests.status, ["closed", "archived"]), lt(requests.closedAt, cutoff)),
                 and(isNull(requests.closedAt), lt(requests.expiresAt, cutoff)),
                 and(isNotNull(submissions.submittedAt), lt(receivedAt, backstop)),
               )

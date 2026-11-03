@@ -252,7 +252,11 @@ export async function deleteWalletDocument(formData: FormData): Promise<ActionRe
   return { ok: true };
 }
 
-/** Revoke future use of a shared credential or document. */
+/**
+ * Record that the job seeker withdrew a share. This is a ledger entry only:
+ * the organisation's submitted copy is not deleted and stays until its
+ * retention policy purges it. The wallet page says so.
+ */
 export async function revokeWalletShare(formData: FormData): Promise<ActionResult> {
   const ctx = await requireEnrolledCandidate();
   const id = String(formData.get("id") ?? "");

@@ -228,17 +228,26 @@ export default async function RequestDetailPage({
             <ul className="divide-y divide-stone-100 text-sm">
               {subs.map((s) => (
                 <li key={s.id} className="flex items-center justify-between py-2">
-                  <Link
-                    href={`/dashboard/requests/${id}/submissions/${s.id}`}
-                    className="font-medium underline-offset-2 hover:underline"
-                  >
-                    {s.purgedAt ? "Purged submission" : (s.responderEmail ?? "Submission")}
-                    <span className="ml-2 text-stone-400">
-                      {s.submittedAt?.toLocaleString("en-AU") ?? "in progress"}
+                  {s.status === "started" ? (
+                    // A draft is readable only by the responder's link; there
+                    // is nothing to review until it is submitted.
+                    <span className="font-medium text-stone-600">
+                      {s.responderEmail ?? "Responder"}
+                      <span className="ml-2 text-stone-400">in progress, not yet submitted</span>
                     </span>
-                  </Link>
+                  ) : (
+                    <Link
+                      href={`/dashboard/requests/${id}/submissions/${s.id}`}
+                      className="font-medium underline-offset-2 hover:underline"
+                    >
+                      {s.purgedAt ? "Purged submission" : (s.responderEmail ?? "Submission")}
+                      <span className="ml-2 text-stone-400">
+                        {s.submittedAt?.toLocaleString("en-AU") ?? "in progress"}
+                      </span>
+                    </Link>
+                  )}
                   <Badge variant={statusBadgeVariant(s.status)}>
-                    {applicationStatusLabel(s.status)}
+                    {s.status === "started" ? "In progress" : applicationStatusLabel(s.status)}
                   </Badge>
                 </li>
               ))}
