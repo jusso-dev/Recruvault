@@ -1,9 +1,9 @@
 #!/bin/sh
-# Trust the proof TLS proxy's throwaway CA (Caddy's internal CA on the shared
-# caddy-data volume) for Chromium (NSS) and Node, then run the driver. TLS
+# Trust the proof TLS proxy's throwaway CA (Caddy's internal root, published
+# to the shared proof-ca volume) for Chromium (NSS) and Node, then run the driver. TLS
 # verification stays on: only this one root is added.
 set -eu
-root=/caddy/caddy/pki/authorities/local/root.crt
+root=/ca/root.crt
 i=0
 until [ -s "$root" ]; do
   i=$((i + 1))

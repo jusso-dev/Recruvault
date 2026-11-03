@@ -54,9 +54,20 @@ services:
 
   tls-proxy:
     image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
-    command: ["caddy", "reverse-proxy", "--from", "${PROOF_HOST:-rv-proof.test}", "--to", "app:3000", "--internal-certs", "--disable-redirects"]
+    # Caddy keeps its CA under 0700 directories. Publish only the public root
+    # certificate, world-readable, so the driver can run as a non-root user.
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        caddy reverse-proxy --from "${PROOF_HOST:-rv-proof.test}" --to app:3000 --internal-certs --disable-redirects &
+        pid=$$!
+        root=/data/caddy/pki/authorities/local/root.crt
+        until [ -s "$$root" ]; do kill -0 "$$pid"; sleep 1; done
+        install -m 0644 "$$root" /ca/root.crt
+        wait "$$pid"
     volumes:
       - caddy-data:/data
+      - proof-ca:/ca
     networks:
       default:
         aliases:
@@ -76,9 +87,10 @@ services:
       PROOF_OWNER_PASSWORD: ${PROOF_OWNER_PASSWORD:?set PROOF_OWNER_PASSWORD}
       STATE_DIR: /state
     volumes:
-      - caddy-data:/caddy:ro
+      - proof-ca:/ca:ro
       - proof-state:/state
 
 volumes:
   caddy-data:
+  proof-ca:
   proof-state:
