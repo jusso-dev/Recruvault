@@ -9,6 +9,16 @@ const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3100";
 const serverURL = new URL(baseURL);
 const serverHostname = serverURL.hostname;
 const serverPort = serverURL.port || (serverURL.protocol === "https:" ? "443" : "80");
+// Override when another Inngest dev server already holds the defaults. The
+// connect gateway and gRPC ports move with it so two suites can coexist.
+const inngestPort = process.env.E2E_INNGEST_PORT ?? "8289";
+const inngestExtraPorts = process.env.E2E_INNGEST_PORT
+  ? [
+      `--connect-gateway-port ${Number(inngestPort) + 1}`,
+      `--connect-gateway-grpc-port ${Number(inngestPort) + 2}`,
+      `--connect-executor-grpc-port ${Number(inngestPort) + 3}`,
+    ].join(" ")
+  : "";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -44,12 +54,15 @@ export default defineConfig({
         ...process.env,
         APP_URL: baseURL,
         ALLOW_RECRUITER_SIGNUP: "true",
-        INNGEST_DEV: "http://127.0.0.1:8289",
+        INNGEST_DEV: `http://127.0.0.1:${inngestPort}`,
         NEXT_DIST_DIR: ".next-e2e",
         RESEND_API_KEY: "",
         SCAN_DISABLED: "true",
         PLAYWRIGHT_TEST: "1",
         BOOTSTRAP_TOKEN: "e2e-bootstrap-token-not-for-production",
+        // Synthetic svix secret so the security matrix can sign webhook calls.
+        RESEND_WEBHOOK_SECRET:
+          "whsec_" + Buffer.from("e2e-webhook-secret-not-for-production").toString("base64"),
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -57,8 +70,8 @@ export default defineConfig({
     {
       name: "Inngest",
       command:
-        `npx inngest dev --no-discovery --sdk-url ${baseURL}/api/inngest --port 8289`,
-      url: "http://127.0.0.1:8289",
+        `npx inngest dev --no-discovery --sdk-url ${baseURL}/api/inngest --port ${inngestPort} ${inngestExtraPorts}`.trim(),
+      url: `http://127.0.0.1:${inngestPort}`,
       timeout: 120_000,
       reuseExistingServer: false,
       stdout: "ignore",
