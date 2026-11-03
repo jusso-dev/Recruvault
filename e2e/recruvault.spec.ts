@@ -740,14 +740,18 @@ test("recruiter progresses and shares an application while reviewer stays read-o
       ["offer", "Offer"],
       ["accepted", "Offer accepted"],
       ["declined", "Not progressing"],
-      ["withdrawn", "Withdrawn"],
       ["placed", "Placed"],
+      ["withdrawn", "Withdrawn"],
     ] as const) {
       await owner.page.getByLabel("Set status").selectOption(value);
       await owner.page.getByRole("button", { name: "Update" }).click();
       await expect(toast(owner.page)).toContainText("Application stage updated");
       await expect(owner.page.getByText(label, { exact: true }).first()).toBeVisible();
     }
+    // Withdrawal is final: the pipeline cannot pull the application back.
+    await owner.page.getByLabel("Set status").selectOption("placed");
+    await owner.page.getByRole("button", { name: "Update" }).click();
+    await expect(owner.page.getByRole("alert").filter({ hasText: "withdrawn" }).first()).toBeVisible();
 
     await owner.page
       .getByLabel("Share with reviewer")
