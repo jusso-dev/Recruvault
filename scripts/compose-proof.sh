@@ -77,6 +77,39 @@ dc_with() {
 dc() { dc_with "$ENV_FILE" "$@"; }
 dk() { docker --context "$CTX" "$@"; }
 
+# Production Compose without the proof overlay, on top of base file $2.
+prod_config() {
+  local env_file="$1" base="$2"
+  docker --context "$CTX" compose -p "$PROJECT" --project-directory "$ROOT" --env-file "$env_file" \
+    -f "$base" -f "$ROOT/docker-compose.prod.yml" config -q
+}
+# The base file's services with nothing set, so only docker-compose.prod.yml
+# can require a variable when layered on it.
+STUB_BASE="$TMP/stub-base.yml"
+cat >"$STUB_BASE" <<'EOF'
+services:
+  app: {image: stub}
+  migrate: {image: stub}
+  db: {image: stub}
+  clamav: {image: stub}
+  minio: {image: stub}
+  minio-init: {image: stub}
+  inngest: {image: stub}
+EOF
+
+# Generated credentials and identities to strip from diagnostics.
+REDACT="$TMP/redact"
+grep -E '^(DATABASE_URL|[A-Z_]*(PASSWORD|SECRET|KEY|KEK|TOKEN|USER|EMAIL|_ID))=' "$ENV_FILE" | cut -d= -f2- >"$REDACT"
+redact() {
+  local value
+  local -a expr=()
+  while IFS= read -r value; do
+    expr+=(-e "s/$(printf '%s' "$value" | sed 's/[]\/$*.^[]/\\&/g')/[redacted]/g")
+  done <"$REDACT"
+  # Anything else that looks like a key or token (hex or base64url).
+  sed "${expr[@]}" -e 's/[0-9a-fA-F]\{24,\}/[redacted]/g' -e 's/[0-9A-Za-z_-]\{32,\}/[redacted]/g'
+}
+
 check() {
   local name="$1"; shift
   if "$@" >>"$LOG" 2>&1; then echo "ok   $name"; else echo "FAIL $name"; FAILED=$((FAILED + 1)); fi
@@ -98,8 +131,12 @@ teardown() {
 finish() {
   local code=$?
   if [ "$FAILED" -gt 0 ] || [ "$code" -ne 0 ]; then
-    # Service states only; logs can hold operational detail.
     dc ps -a --format '  {{.Service}}: {{.State}} {{.Health}} exit={{.ExitCode}}' 2>/dev/null || true
+    # Recent lines only, with every generated value and token-like string removed.
+    echo "  -- proof log, last 25 lines"
+    tail -n 25 "$LOG" 2>/dev/null | redact | sed 's/^/  | /' || true
+    echo "  -- migrate and app logs, last 15 lines each"
+    dc logs --no-color --tail 15 migrate app 2>/dev/null | redact | sed 's/^/  | /' || true
   fi
   teardown
   rm -rf "$TMP"
@@ -120,12 +157,12 @@ psql_q() {
 
 # Prints "<http code> <status> <database> <storage> <scanner> <jobs>".
 health() {
-  dc exec -T app node -e "fetch('http://127.0.0.1:3000/api/health').then(async r => { const j = await r.json(); console.log(r.status, j.status, j.database, j.storage, j.scanner, j.jobs) }).catch(() => console.log('error'))"
+  dc exec -T app node -e "fetch('http://127.0.0.1:3000/api/health', { signal: AbortSignal.timeout(10000) }).then(async r => { const j = await r.json(); console.log(r.status, j.status, j.database, j.storage, j.scanner, j.jobs) }).catch(() => console.log('error'))"
 }
 health_is() { [ "$(health)" = "$1" ]; }
 
 http_code() {
-  dc exec -T app node -e "fetch('http://127.0.0.1:3000$1', { method: '${2:-GET}' }).then(r => console.log(r.status)).catch(() => console.log('error'))"
+  dc exec -T app node -e "fetch('http://127.0.0.1:3000$1', { method: '${2:-GET}', signal: AbortSignal.timeout(10000) }).then(r => console.log(r.status)).catch(() => console.log('error'))"
 }
 
 wait_until() {
@@ -143,11 +180,19 @@ restart_app() { dc restart app && wait_until 120 app_healthy; }
 app_healthy() { [ "$(dk inspect -f '{{.State.Health.Status}}' "$(dc ps -q app)")" = "healthy" ]; }
 driver() { dc run --rm --no-deps proof-driver "$@" 2>>"$LOG"; }
 
+# Without $1 (in the env file and this shell), production Compose must refuse
+# to render and name $1: as shipped, and with docker-compose.prod.yml alone on
+# the stub base, because the shipped base file already requires some secrets.
 missing_secret_refused() {
-  local name="$1" partial="$TMP/missing.env"
+  local name="$1" partial="$TMP/missing.env" base out
   grep -v "^$name=" "$ENV_FILE" >"$partial"
-  ! dc_with "$partial" config -q
+  for base in "$ROOT/docker-compose.yml" "$STUB_BASE"; do
+    if out="$(unset "$name"; prod_config "$partial" "$base" 2>&1)"; then return 1; fi
+    printf '%s\n' "$out"
+    printf '%s\n' "$out" | grep -q "required variable $name is missing a value" || return 1
+  done
 }
+prod_renders() { prod_config "$ENV_FILE" "$ROOT/docker-compose.yml" && prod_config "$ENV_FILE" "$STUB_BASE"; }
 
 only_app_published() {
   local published
@@ -157,7 +202,15 @@ only_app_published() {
     printf '%s' "$published" | grep -q "^app 127.0.0.1:$PORT->3000/tcp$"
 }
 
-no_dev_inngest() { [ -z "$(dc ps -aq inngest 2>/dev/null)" ]; }
+# By label, so a failed lookup cannot pass as "no container". The app lookup
+# proves the same filter finds this project's containers.
+service_containers() {
+  dk ps -aq --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=$1"
+}
+no_dev_inngest() {
+  local app inngest
+  app="$(service_containers app)" && inngest="$(service_containers inngest)" && [ -n "$app" ] && [ -z "$inngest" ]
+}
 migrate_succeeded() { dc ps -a --format '{{.Service}} {{.ExitCode}}' | grep -qx 'migrate 0'; }
 reference_seeded() { [ "$(psql_q 'select count(*) from reference_values where org_id is null')" -ge 6 ]; }
 unsigned_inngest_refused() { [ "$(http_code '/api/inngest?fnId=recruvault-publish-outbox&stepId=step' POST)" = "401" ]; }
@@ -175,14 +228,23 @@ jobs_backlog_visible() {
     wait_until 30 health_is "200 degraded ok ok unavailable backlog"
 }
 
+# Must fail because the database refuses the credentials, not for another
+# reason. drizzle-kit exits 1 without printing the cause; PostgreSQL logs it.
 failing_migration_exits() {
-  ! dc run --rm --no-deps -e "DATABASE_URL=postgres://proof_invalid:$(hex 16)@db:5432/recruvault" migrate
+  local bad
+  bad="$(hex 16)"
+  echo "$bad" >>"$REDACT"
+  if dc run --rm --no-deps -e "DATABASE_URL=postgres://proof_invalid:$bad@db:5432/recruvault" migrate; then
+    return 1
+  fi
+  dc logs --no-color db 2>&1 | grep -q 'password authentication failed for user "proof_invalid"'
 }
 
 # -- proof --------------------------------------------------------------------
 
 echo "commit $(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" diff --quiet HEAD -- || echo '+uncommitted'), context $CTX, project $PROJECT"
 
+check "production compose renders with every secret set" prod_renders
 # BOOTSTRAP_TOKEN is set and used below, but production may run without it.
 for name in LOCAL_KEK BETTER_AUTH_SECRET POSTGRES_PASSWORD MINIO_ROOT_PASSWORD INNGEST_SIGNING_KEY; do
   check "production compose refuses a missing $name" missing_secret_refused "$name"

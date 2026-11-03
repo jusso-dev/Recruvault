@@ -239,6 +239,9 @@ jobs:
           INNGEST_SIGNING_KEY: signkey-prod-0123456789abcdef
           RESEND_API_KEY: re_smoke_invalid
           RESEND_FROM_EMAIL: vault@example.org
+          # Closed local port: email and job events never leave the runner.
+          RESEND_BASE_URL: http://127.0.0.1:9
+          INNGEST_BASE_URL: http://127.0.0.1:9
 
       # Real browser against the standalone server: enforced CSP with zero
       # violations, injected scripts blocked, framing and CORS. Traces,
@@ -265,6 +268,9 @@ jobs:
           INNGEST_SIGNING_KEY: signkey-prod-0123456789abcdef
           RESEND_API_KEY: re_smoke_invalid
           RESEND_FROM_EMAIL: vault@example.org
+          # Closed local port: email and job events never leave the runner.
+          RESEND_BASE_URL: http://127.0.0.1:9
+          INNGEST_BASE_URL: http://127.0.0.1:9
 
   mcp:
     name: MCP install, audit, and protocol tests

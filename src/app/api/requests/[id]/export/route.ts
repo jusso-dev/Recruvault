@@ -125,7 +125,9 @@ export async function GET(
   }
 
   const headers = rows.length > 0 ? Object.keys(rows[0]) : ["submission_id"];
-  const escape = (s: string) => `"${s.replace(/"/g, '""')}"`;
+  // Quote every cell, and neutralise spreadsheet formulas in answers a
+  // candidate controls (=, +, -, @, tab, carriage return).
+  const escape = (s: string) => `"${(/^[=+\-@\t\r]/.test(s) ? `'${s}` : s).replace(/"/g, '""')}"`;
   const csv = [
     headers.map(escape).join(","),
     ...rows.map((r) => headers.map((h) => escape(r[h] ?? "")).join(",")),

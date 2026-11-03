@@ -7,7 +7,19 @@ describe("post-auth redirect paths", () => {
   it("keeps same-origin paths only", () => {
     expect(safeNextPath("/invite/abc")).toBe("/invite/abc");
     expect(safeNextPath("/dashboard?x=1")).toBe("/dashboard?x=1");
-    for (const bad of [null, undefined, "", "https://evil.example", "//evil.example", "/\\evil.example", "invite"]) {
+    for (const bad of [
+      null,
+      undefined,
+      "",
+      "https://evil.example",
+      "//evil.example",
+      "/\\evil.example",
+      "invite",
+      // Browsers drop tab/newline while parsing, turning these into //evil.example.
+      "/\t/evil.example",
+      "/\t\\evil.example",
+      "/\n/evil.example",
+    ]) {
       expect(safeNextPath(bad)).toBeNull();
     }
   });

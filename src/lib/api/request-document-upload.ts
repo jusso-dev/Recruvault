@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { createHash } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { documents, requests } from "@/db/schema";
+import { consents, documents, requests, submissions } from "@/db/schema";
 import { resolveOrgContext } from "@/lib/api-auth";
 import { ApiError, json } from "@/lib/api/http";
 import { JD_ALLOWED_TYPES, UPLOAD_MAX_BYTES } from "@/lib/fields";
@@ -35,6 +35,19 @@ export async function uploadRequestDocument(req: NextRequest, id: string, kind: 
     .from(requests)
     .where(and(eq(requests.id, id), eq(requests.orgId, ctx.orgId)));
   if (!request || !canManageRequest(ctx, request)) throw new ApiError(404, "Request not found.");
+  if (kind === "nda") {
+    // Accepted NDAs are evidence for those applications; replacing one would
+    // shred the document applicants agreed to.
+    const [accepted] = await db
+      .select({ id: consents.id })
+      .from(consents)
+      .innerJoin(submissions, eq(submissions.id, consents.submissionId))
+      .where(and(eq(submissions.requestId, id), eq(consents.type, "nda")))
+      .limit(1);
+    if (accepted) {
+      throw new ApiError(409, "Applicants have already accepted this role's NDA, so it cannot be replaced.");
+    }
+  }
 
   const form = await req.formData().catch(() => {
     throw new ApiError(400, `Expected multipart/form-data with a '${kind}' file.`);

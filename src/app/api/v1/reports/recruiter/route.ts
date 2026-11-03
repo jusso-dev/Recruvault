@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import {
   accessTokens,
@@ -10,6 +10,7 @@ import {
 } from "@/db/schema";
 import { resolveOrgContext } from "@/lib/api-auth";
 import { handle, json } from "@/lib/api/http";
+import { can } from "@/lib/rbac";
 
 const ACTIVE_ROLE_STATUSES = new Set(["open", "closing_soon"]);
 const RECRUITER_ACTION_STATUSES = new Set(["received", "follow_up"]);
@@ -58,6 +59,11 @@ export async function GET(req: NextRequest) {
     const sevenDaysAgo = new Date(now.getTime() - 7 * DAY_MS);
     const fourteenDaysAgo = new Date(now.getTime() - 14 * DAY_MS);
     const thirtyDaysAgo = new Date(now.getTime() - 30 * DAY_MS);
+    // Recruiters report on the roles they created, as on the dashboard.
+    const ownRoles = and(
+      eq(requests.orgId, ctx.orgId),
+      can(ctx.role, "submissions:view_all") ? undefined : eq(requests.createdBy, ctx.userId),
+    );
 
     const [roleRows, submissionRows, invitationRows, matchNotificationRows] = await Promise.all([
       db
@@ -70,7 +76,7 @@ export async function GET(req: NextRequest) {
           createdAt: requests.createdAt,
         })
         .from(requests)
-        .where(eq(requests.orgId, ctx.orgId)),
+        .where(ownRoles),
       db
         .select({
           id: submissions.id,
@@ -83,7 +89,7 @@ export async function GET(req: NextRequest) {
         })
         .from(submissions)
         .innerJoin(requests, eq(requests.id, submissions.requestId))
-        .where(eq(requests.orgId, ctx.orgId)),
+        .where(ownRoles),
       db
         .select({
           id: accessTokens.id,
@@ -101,7 +107,7 @@ export async function GET(req: NextRequest) {
         .innerJoin(requests, eq(requests.id, accessTokens.requestId))
         .leftJoin(deliveries, eq(deliveries.accessTokenId, accessTokens.id))
         .leftJoin(submissions, eq(submissions.accessTokenId, accessTokens.id))
-        .where(eq(requests.orgId, ctx.orgId)),
+        .where(ownRoles),
       db
         .select({
           requestId: jobMatchNotifications.requestId,
@@ -111,7 +117,12 @@ export async function GET(req: NextRequest) {
           createdAt: jobMatchNotifications.createdAt,
         })
         .from(jobMatchNotifications)
-        .where(eq(jobMatchNotifications.orgId, ctx.orgId)),
+        .where(
+          and(
+            eq(jobMatchNotifications.orgId, ctx.orgId),
+            inArray(jobMatchNotifications.requestId, db.select({ id: requests.id }).from(requests).where(ownRoles)),
+          ),
+        ),
     ]);
 
     const roleIds = new Set(roleRows.map((role) => role.id));
