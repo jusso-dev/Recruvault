@@ -131,9 +131,9 @@ describe("loadDraftValues", () => {
     for (const [label, browser] of [["anonymous", anonymous], ["another link's session", otherResponder]] as const) {
       const values = await asBrowser(browser, () => loadDraftValues(target.accessTokenId));
       expect(JSON.stringify(values), label).not.toContain(marker);
-      expect(values, label).toEqual({});
+      expect(values, label).toEqual({ values: {}, restoreFailed: false });
     }
     const own = await asBrowser(owner, () => loadDraftValues(target.accessTokenId));
-    expect(own[target.textFieldId]).toBe(marker);
+    expect(own.values[target.textFieldId]).toBe(marker);
   });
 });

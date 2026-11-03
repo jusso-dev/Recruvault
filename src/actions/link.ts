@@ -685,13 +685,14 @@ export async function loadDraftValues(
 
   const draftSecret = await readDraftSecret(accessTokenId);
   try {
-    if (!draftSecret) throw new Error("No draft secret for this link.");
+    // Without the draft secret a link-wrapped key cannot open and the draft
+    // is discarded below; legacy LOCAL_KEK drafts still open.
     const keyCache = new Map<string, Promise<Buffer>>();
     const out: Record<string, string> = {};
     for (const v of vals) {
       let p = keyCache.get(v.dekId);
       if (!p) {
-        p = getDataKey(v.dekId, { linkSecret: draftSecret });
+        p = getDataKey(v.dekId, { linkSecret: draftSecret ?? undefined });
         keyCache.set(v.dekId, p);
       }
       out[v.fieldId] = decryptFieldWithKey(v.valueEncrypted, await p);
