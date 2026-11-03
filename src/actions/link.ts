@@ -41,6 +41,7 @@ import { audit } from "@/lib/audit";
 import { getSession, requestMeta } from "@/lib/guards";
 import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
 import { activeVault } from "@/lib/vault-store";
+import { VaultCryptoError } from "@/lib/vault-crypto";
 import { discardProtectedUploads, protectDocument, putProtectedObject } from "@/lib/document-protect";
 import { sniffContentType } from "@/lib/scan";
 import { allowedTypesForField, UPLOAD_MAX_BYTES } from "@/lib/fields";
@@ -188,7 +189,7 @@ export async function verifyOtp(rawToken: string, code: string): Promise<ActionR
     .set({ verifiedAt: new Date(), otpHash: null })
     .where(eq(accessTokens.id, at.id));
   await issueLinkSession(at.id);
-  await ensureDraftSecret(at.id, rawToken, at.expiresAt);
+  await ensureDraftSecret(at.id, at.expiresAt);
 
   await audit({
     orgId: req.orgId,
@@ -659,11 +660,21 @@ async function shredDraftKeys(executor: Tx | typeof db, accessTokenId: string) {
   for (const { dekId } of keys) await shredDataKey(dekId, executor);
 }
 
+/** True when a draft key could not be unwrapped with this browser's draft secret. */
+function isUnopenable(err: unknown): boolean {
+  return err instanceof VaultCryptoError || (err instanceof Error && /unable to authenticate data/i.test(err.message));
+}
+
 /**
  * Decrypted structured values of the saved draft for a link, keyed by fieldId.
- * A draft this browser cannot open (its draft secret is missing or does not
- * match) is unrecoverable: its key is shredded, its values removed, and the
- * caller is told so it can explain rather than fail.
+ *
+ * - No draft secret in this browser (another device, or a pre-upgrade
+ *   session): the draft is left intact for the browser that holds it, and the
+ *   caller is told it cannot be restored here. Saving replaces it.
+ * - A draft secret that does not open the key: that draft is unrecoverable,
+ *   so exactly the keys that failed are shredded and their values removed.
+ * - A key shredded mid-read (a concurrent save replaced the draft) or any
+ *   database error never discards anything.
  */
 export async function loadDraftValues(
   accessTokenId: string,
@@ -684,26 +695,35 @@ export async function loadDraftValues(
   if (vals.length === 0) return { values: {}, restoreFailed: false };
 
   const draftSecret = await readDraftSecret(accessTokenId);
-  try {
-    // Without the draft secret a link-wrapped key cannot open and the draft
-    // is discarded below; legacy LOCAL_KEK drafts still open.
-    const keyCache = new Map<string, Promise<Buffer>>();
-    const out: Record<string, string> = {};
-    for (const v of vals) {
-      let p = keyCache.get(v.dekId);
-      if (!p) {
-        p = getDataKey(v.dekId, { linkSecret: draftSecret ?? undefined });
-        keyCache.set(v.dekId, p);
+  const out: Record<string, string> = {};
+  const failed = new Set<string>();
+  let replaced = false;
+  for (const dekId of new Set(vals.map((v) => v.dekId))) {
+    let key: Buffer;
+    try {
+      // Legacy LOCAL_KEK drafts open without the draft secret.
+      key = await getDataKey(dekId, { linkSecret: draftSecret ?? undefined });
+    } catch (err) {
+      if (err instanceof Error && err.message === "Data key has been shredded.") {
+        replaced = true;
+        continue;
       }
-      out[v.fieldId] = decryptFieldWithKey(v.valueEncrypted, await p);
+      if (!isUnopenable(err)) throw err;
+      failed.add(dekId);
+      continue;
     }
-    return { values: out, restoreFailed: false };
-  } catch (err) {
-    log.warn({ err, accessTokenId }, "saved draft could not be opened; discarding it");
-    await db.transaction(async (tx) => {
-      await shredDraftKeys(tx, accessTokenId);
-      await tx.delete(submissionValues).where(eq(submissionValues.submissionId, draft.id));
-    });
-    return { values: {}, restoreFailed: true };
+    for (const v of vals) if (v.dekId === dekId) out[v.fieldId] = decryptFieldWithKey(v.valueEncrypted, key);
   }
+  if (replaced) return { values: {}, restoreFailed: false };
+  if (failed.size === 0) return { values: out, restoreFailed: false };
+  if (!draftSecret) return { values: {}, restoreFailed: true };
+
+  log.warn({ accessTokenId }, "saved draft could not be opened with this browser's draft secret; discarding it");
+  await db.transaction(async (tx) => {
+    for (const dekId of failed) await shredDataKey(dekId, tx);
+    await tx
+      .delete(submissionValues)
+      .where(and(eq(submissionValues.submissionId, draft.id), inArray(submissionValues.dekId, [...failed])));
+  });
+  return { values: {}, restoreFailed: true };
 }

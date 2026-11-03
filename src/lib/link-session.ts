@@ -10,7 +10,7 @@ import { cookies } from "next/headers";
  */
 
 const COOKIE = "rv_link_session";
-const DRAFT_COOKIE = "rv_link_draft";
+const DRAFT_COOKIE_PREFIX = "rv_link_draft_";
 const TTL_MS = 60 * 60 * 1000; // 1 hour
 
 function secret(): string {
@@ -41,25 +41,27 @@ export async function issueLinkSession(accessTokenId: string): Promise<void> {
 
 /**
  * Draft secrets. A saved draft is wrapped with a random per-link secret held
- * only in this browser, in its own httpOnly cookie scoped to the link's path
- * and living as long as the link. It is independent of the one-hour session,
- * so a responder who re-verifies after the session lapses still opens their
- * draft. An existing secret is never replaced, or the draft would be lost.
+ * only in this browser, in its own httpOnly cookie named for the link and
+ * living as long as the link. It is independent of the one-hour session, so
+ * a responder who re-verifies after the session lapses still opens their
+ * draft. The cookie is scoped to `/r/` rather than the token path because an
+ * expiry reminder rotates the link's token. An existing secret is never
+ * replaced, or the draft would be lost.
  */
-export async function ensureDraftSecret(
-  accessTokenId: string,
-  rawToken: string,
-  linkExpiresAt: Date,
-): Promise<void> {
+export function draftCookieName(accessTokenId: string): string {
+  return `${DRAFT_COOKIE_PREFIX}${accessTokenId}`;
+}
+
+export async function ensureDraftSecret(accessTokenId: string, linkExpiresAt: Date): Promise<void> {
   if (await readDraftSecret(accessTokenId)) return;
   const maxAge = Math.floor((linkExpiresAt.getTime() - Date.now()) / 1000);
   if (maxAge <= 0) return;
   const jar = await cookies();
-  jar.set(DRAFT_COOKIE, `${accessTokenId}.${randomBytes(32).toString("base64url")}`, {
+  jar.set(draftCookieName(accessTokenId), randomBytes(32).toString("base64url"), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
-    path: `/r/${encodeURIComponent(rawToken)}`,
+    path: "/r/",
     maxAge,
   });
 }
@@ -67,11 +69,7 @@ export async function ensureDraftSecret(
 /** The draft secret for this link, or null when this browser holds none. */
 export async function readDraftSecret(accessTokenId: string): Promise<string | null> {
   const jar = await cookies();
-  const raw = jar.get(DRAFT_COOKIE)?.value;
-  if (!raw) return null;
-  const at = raw.indexOf(".");
-  if (at <= 0 || raw.slice(0, at) !== accessTokenId) return null;
-  return raw.slice(at + 1) || null;
+  return jar.get(draftCookieName(accessTokenId))?.value || null;
 }
 
 /** Returns the verified access token id, or null. */

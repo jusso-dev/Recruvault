@@ -24,7 +24,7 @@ async function responder(accessTokenId: string): Promise<Browser> {
   const { ensureDraftSecret, issueLinkSession } = await import("@/lib/link-session");
   await asBrowser(browser, async () => {
     await issueLinkSession(accessTokenId);
-    await ensureDraftSecret(accessTokenId, "raw-token", new Date(Date.now() + 86_400_000));
+    await ensureDraftSecret(accessTokenId, new Date(Date.now() + 86_400_000));
   });
   return browser;
 }
@@ -136,11 +136,11 @@ describe("draft restore", () => {
     const rawToken = randomBytes(32).toString("base64url");
     const browser = newBrowser();
     await verifyThroughOtp(browser, l.accessTokenId, rawToken);
-    expect(browser.jar.get("rv_link_draft")).toBeTruthy();
+    expect(browser.jar.get(`rv_link_draft_${l.accessTokenId}`)).toBeTruthy();
 
     const saved = await asBrowser(browser, () => link.saveDraft(draft(l.textFieldId, "draft-restore-5150")));
     expect(saved.ok).toBe(true);
-    const secret = browser.jar.get("rv_link_draft");
+    const secret = browser.jar.get(`rv_link_draft_${l.accessTokenId}`);
 
     // The one-hour session lapses; the draft cannot be read until re-verification.
     browser.jar.delete("rv_link_session");
@@ -151,7 +151,7 @@ describe("draft restore", () => {
     expect(await draftKeyIds(l.accessTokenId)).toHaveLength(1);
 
     await verifyThroughOtp(browser, l.accessTokenId, rawToken);
-    expect(browser.jar.get("rv_link_draft")).toBe(secret);
+    expect(browser.jar.get(`rv_link_draft_${l.accessTokenId}`)).toBe(secret);
     const restored = await asBrowser(browser, () => link.loadDraftValues(l.accessTokenId));
     expect(restored).toEqual({ values: { [l.textFieldId]: "draft-restore-5150" }, restoreFailed: false });
   });
@@ -164,7 +164,7 @@ describe("draft restore", () => {
     expect((await asBrowser(browser, () => link.saveDraft(draft(l.textFieldId, "lost-draft")))).ok).toBe(true);
     const [dekId] = await draftKeyIds(l.accessTokenId);
 
-    browser.jar.set("rv_link_draft", `${l.accessTokenId}.${randomBytes(32).toString("base64url")}`);
+    browser.jar.set(`rv_link_draft_${l.accessTokenId}`, randomBytes(32).toString("base64url"));
     const result = await asBrowser(browser, () => link.loadDraftValues(l.accessTokenId));
     expect(result).toEqual({ values: {}, restoreFailed: true });
     expect(await isShredded(dekId)).toBe(true);
@@ -176,6 +176,29 @@ describe("draft restore", () => {
     const stranger = await responder(other.accessTokenId);
     expect(await asBrowser(stranger, () => link.loadDraftValues(l.accessTokenId))).toEqual({
       values: {},
+      restoreFailed: false,
+    });
+  });
+
+  it("keeps a draft that another browser holds the secret for", async () => {
+    const org = await createOrgWithVault(db);
+    const l = await createRequestWithLink(db, org);
+    await db.update(accessTokens).set({ verifiedAt: new Date() }).where(eq(accessTokens.id, l.accessTokenId));
+    const first = await responder(l.accessTokenId);
+    expect((await asBrowser(first, () => link.saveDraft(draft(l.textFieldId, "first-device")))).ok).toBe(true);
+    const [dekId] = await draftKeyIds(l.accessTokenId);
+
+    // Same verified link on a second device: no draft secret there.
+    const second = newBrowser();
+    const { issueLinkSession } = await import("@/lib/link-session");
+    await asBrowser(second, () => issueLinkSession(l.accessTokenId));
+    expect(await asBrowser(second, () => link.loadDraftValues(l.accessTokenId))).toEqual({
+      values: {},
+      restoreFailed: true,
+    });
+    expect(await isShredded(dekId)).toBe(false);
+    expect(await asBrowser(first, () => link.loadDraftValues(l.accessTokenId))).toEqual({
+      values: { [l.textFieldId]: "first-device" },
       restoreFailed: false,
     });
   });
