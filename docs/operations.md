@@ -3,9 +3,9 @@
 ## Fresh install
 
 1. Generate `BETTER_AUTH_SECRET`, `LOCAL_KEK`, and `BOOTSTRAP_TOKEN` with `openssl rand -hex 32`. Use different values. Do not reuse the development defaults.
-2. For production, also set `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, an `https://` `APP_URL`, and `TRUSTED_DOMAINS`. Leave `INNGEST_DEV` empty. Set `ALLOW_RECRUITER_SIGNUP=false`. With Compose, also set `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` (and a matching `DATABASE_URL`), `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`, and a separate `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` for the app's bucket-scoped MinIO user.
+2. For production, also set `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY` (see [background jobs](#background-jobs-inngest)), `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and `RESEND_WEBHOOK_SECRET` (see [email](#email)), an `https://` `APP_URL` that is exactly the public origin, and `TRUSTED_DOMAINS`. Leave `INNGEST_DEV` empty. Set `ALLOW_RECRUITER_SIGNUP=false`. With Compose, also set `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` (and a matching `DATABASE_URL`), `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`, and a separate `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` for the app's bucket-scoped MinIO user.
 3. Start with `docker compose -f docker-compose.yml -f docker-compose.prod.yml up`. The production file does not publish PostgreSQL or MinIO, and it refuses missing secrets. The `migrate` service applies migrations and seeds reference data before the app starts; either failure stops the app from starting.
-4. `npm run check:deploy-env` checks the process environment and does not print secret values. The app refuses to boot in production with placeholder or reused secrets, a default database or storage password, `SCAN_DISABLED`, `PLAYWRIGHT_TEST`, `INNGEST_DEV`, missing email credentials, or a non-https `APP_URL`. `/api/live` is liveness. `/api/health` is readiness: it returns 503 when the database or object store is unreachable and reports `degraded` while ClamAV is not answering (uploads are refused until it does).
+4. `npm run check:deploy-env` checks the process environment and does not print secret values. The app refuses to boot in production with placeholder or reused secrets, a default database or storage password, `SCAN_DISABLED`, `PLAYWRIGHT_TEST`, `INNGEST_DEV`, missing email credentials, or a non-https `APP_URL`. See [health checks](#health-checks) for `/api/live` and `/api/health`.
 5. Complete [first-owner bootstrap](#first-owner-bootstrap): open `/setup`, create the owner account, open the verification email, then submit the organisation name, `BOOTSTRAP_TOKEN`, and a new encryption key. Store the encryption key outside the server. Setup stores only a verifier and wrapped key material.
 
 Development binds published ports to `127.0.0.1` and can include the Inngest dev server. Production compose does not start that server.
@@ -22,11 +22,50 @@ Installs that already had an owner before the bootstrap row existed are marked c
 ## Deployment hardening
 
 - **Ingress.** Production compose publishes only the app, on `127.0.0.1:3000`. Terminate TLS in a reverse proxy on the same host (Caddy, nginx, or a load balancer) and forward to that port. Do not publish PostgreSQL, MinIO, ClamAV, or the MinIO console. Recruvault sets HSTS, so serve the site only over https.
-- **Forwarded headers.** Set `TRUSTED_PROXY_HOPS` to the number of proxies that append to `X-Forwarded-For` (default 1). Rate limits read the client address that many hops from the right, so a client cannot choose its own address by sending the header. Proxies must set `X-Forwarded-Proto`.
+- **Forwarded headers.** Set `TRUSTED_PROXY_HOPS` to the number of proxies that append to `X-Forwarded-For` (default 1). Rate limits read the client address that many hops from the right, so a client cannot choose its own address by sending the header. Proxies must set `X-Forwarded-Proto` and pass the public `Host` through (or set `X-Forwarded-Host` to it): sign-in and server actions refuse requests whose `Origin` does not match `APP_URL` and the forwarded host. Caddy's `reverse_proxy` does all of this by default; with nginx use `proxy_set_header Host $host;`, `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`, and `proxy_set_header X-Forwarded-Proto https;`.
 - **Object storage.** The bucket is private (`mc anonymous set none`) and the app's MinIO user can only get, put, delete, and list objects in that bucket. On AWS S3, block public access and grant the app the same four actions on the bucket only. Document bytes are encrypted before upload; storage-side encryption is defence in depth.
 - **Runtime container.** The app runs as an unprivileged user with a read-only root filesystem, a tmpfs for `/tmp` and the Next.js cache, all Linux capabilities dropped, and `no-new-privileges`. The image has no npm, Yarn, or Corepack. A `HEALTHCHECK` probes `/api/live`.
 - **Images.** Base images and Compose services are pinned by version and digest and updated through Dependabot. CI scans the `runner` and `migrate` images with Trivy and fails if any layer contains an `.env` file. The upstream `minio/minio` images are no longer published on Docker Hub, so Compose uses the `pgsty/minio` community rebuild; point `S3_ENDPOINT` at AWS S3 or another S3-compatible store to avoid it.
-- **Jobs.** Production needs signed Inngest (Cloud or self-hosted with `INNGEST_SIGNING_KEY`). Delivery, the outbox publisher, document cleanup, retention purge, and nightly backups all run there. If jobs stop, `/api/health` still passes, so monitor Inngest run failures and the outbox depth.
+- **Jobs.** Production needs signed Inngest; see [background jobs](#background-jobs-inngest).
+
+### Email
+
+Setup, sign-in recovery, invitations, and alerts all depend on email, and the production boot check refuses to start without `RESEND_API_KEY` and `RESEND_FROM_EMAIL`.
+
+1. In Resend, add and verify the sending domain (SPF, DKIM, and a DMARC policy). `RESEND_FROM_EMAIL` must be an address on that domain. `SHARED_SENDING_DOMAIN` is the domain shown for organisations without their own verified sending domain.
+2. Create an API key limited to sending and set it as `RESEND_API_KEY`.
+3. Add a webhook to `https://<APP_URL host>/api/webhooks/resend` for bounce and complaint events and set its signing secret as `RESEND_WEBHOOK_SECRET`. Unsigned or wrongly signed webhook calls get 401. Without the secret, bounces are never suppressed.
+
+Failures are visible, not silent. If Resend is unreachable or rejects the key, sign-up still creates the account and password-reset requests keep their neutral answer (so they cannot reveal which addresses exist), but both sends are logged as failed background tasks, and **Resend verification email** returns an error to the user. Invitations and alerts go through the outbox and the delivery worker, so a failed send marks the delivery failed and never shows a false "sent". Production never logs the link or code instead.
+
+### Background jobs (Inngest)
+
+Delivery, scanning, the outbox publisher, reminders, retention purge, erasure resumption, storage reconciliation, and nightly backups run as Inngest functions served at `/api/inngest`. Production refuses `INNGEST_DEV` and requires `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`, so every call to `/api/inngest` must be signed; unsigned calls get 401.
+
+- **Inngest Cloud.** Use the event and signing keys from the Inngest app, leave `INNGEST_BASE_URL` unset, and sync `https://<APP_URL host>/api/inngest` from the Inngest dashboard.
+- **Self-hosted.** Run `inngest start` (the same pinned `inngest/inngest` image as the development service) on the private network with `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` in its environment (the signing key must be hex, for example `openssl rand -hex 32`), `--sdk-url http://app:3000/api/inngest`, and `--no-ui` unless the UI sits behind your own access control. Set `INNGEST_BASE_URL=http://<inngest host>:8288` on the app. Do not publish its ports. By default it keeps state in SQLite and an in-process Redis inside the container; give it `--postgres-uri` and `--redis-uri` (or `--sqlite-dir` on a volume) if queued runs must survive a restart of the Inngest container. `test/compose/docker-compose.proof.yml` shows a working layout.
+
+Jobs cannot report their own outage, so readiness watches the outbox: see [health checks](#health-checks). Also alert on the `outbox needs attention` warning and on Inngest run failures.
+
+### Health checks
+
+- `/api/live` is liveness. It answers 200 whenever the Node process serves requests and checks nothing else, so a database or storage outage does not get the container restarted. The image `HEALTHCHECK` uses it.
+- `/api/health` is readiness. It returns 503 with `status: "unavailable"` when PostgreSQL or the object store is unreachable; route traffic away. It returns 200 with `status: "degraded"` when ClamAV is not answering (`scanner: "unavailable"`; uploads are refused until it does) or when jobs are not draining (`jobs: "backlog"`: a dead outbox event, or a pending one older than 15 minutes). Alert on `degraded`. The body holds component states only.
+
+## Install proof
+
+`scripts/compose-proof.sh --context <docker-context>` proves a production Compose install end to end, and CI runs it on every pull request (`compose-proof` job). It generates every secret into a `0600` file in a private temp directory, never prints them, builds the images on that Docker context, and starts `docker-compose.yml` + `docker-compose.prod.yml` with the test-only `test/compose/docker-compose.proof.yml`. That overlay adds a Caddy TLS proxy with a throwaway CA (so `APP_URL` is https), a stand-in for the Resend API that the unmodified app reaches through `RESEND_BASE_URL`, self-hosted Inngest in production mode, and a headless Chromium driver that trusts only the throwaway CA. Nothing in the overlay is published on the host except the app port.
+
+It checks, printing names and pass or fail only:
+
+- Compose refuses a missing secret; the stack migrates, seeds reference data, and becomes ready; only the app port is published, on `127.0.0.1`; the Inngest dev server is absent; unsigned `/api/inngest` calls get 401.
+- The first owner signs up, cannot continue before verification, follows the emailed link in a fresh browser, is refused with a wrong bootstrap token, enrols a customer key, and reaches the dashboard. `/setup` then closes.
+- Signed self-hosted Inngest publishes a queued outbox event.
+- After an app restart, setup stays closed, a new session must unlock with the customer key, and a wrong key is refused.
+- With the scanner stopped, readiness is `degraded`; with the email API stopped, resending verification fails visibly; with Inngest stopped and an aged outbox event, readiness reports `jobs: "backlog"`; a migration with bad credentials exits non-zero; with the database stopped, readiness is 503 and liveness still answers.
+- Teardown leaves no containers, volumes, network, or built images for the project.
+
+Limits: the email API is a stand-in, so SPF/DKIM/DMARC and real delivery are not covered; the job-backlog check inserts an aged outbox row instead of waiting 15 minutes; the TLS proxy runs in the same Compose project rather than in front of it. Use `PROOF_SUBNET` when the host's default Docker address pools are exhausted and `PROOF_APP_PORT` to pick the published port.
 
 ## Upgrade
 
@@ -109,7 +148,30 @@ The second query must show only the new version (plus version 0 for any remainin
 
 ## Rollback
 
-If a migration has not been applied, redeploy the previous image. If it has been applied, restore the isolated backup from step 1 rather than running the new code against a partially migrated database. Do not change `LOCAL_KEK` to try to read old rows.
+Migrations are forward only: `drizzle/` has no down migrations, and the `migrate` service applies every pending migration each time the stack starts. Rolling back the image does not roll back the schema.
+
+**Before upgrading**, record the running image digest and take a PostgreSQL dump (`pg_dump -Fc`) of the live database plus a copy of the object bucket, both from the old release. Keep `LOCAL_KEK`, `BETTER_AUTH_SECRET`, and `LINK_SESSION_SECRET` (if set) unchanged across the upgrade and any rollback. Note in the release notes whether the release contains migrations and whether any of them is incompatible with the previous release.
+
+Decide which case applies:
+
+| Situation | Rollback |
+| --- | --- |
+| The new `migrate` container failed | The app never started (it waits for `migrate` to exit 0). Pending migrations run in one transaction, so the schema is unchanged. Fix the cause or redeploy the previous image digest. Check `drizzle.__drizzle_migrations` to confirm which migrations are recorded. |
+| Migrations applied, all additive (new tables, nullable columns), no new key or envelope format | Redeploy the previous image digest. The old code ignores the new columns, and rows it writes leave them at their defaults. |
+| A migration drops, renames, or retypes a column, or the release changes how records, documents, or keys are wrapped | Do not run the old image against the new schema. Restore the pre-upgrade dump into a fresh database, point the previous image at it, and restore the bucket copy. Data written after the dump is lost. |
+| A customer key rotation completed after the upgrade | Rotation has no rollback once complete. A pre-rotation dump opens only with the old customer key, so keep it until those dumps age out. See [key rotation](#key-rotation). |
+| Owners enrolled customer keys on a release whose predecessor had no customer vault | The old release cannot read customer-wrapped records. Restore the pre-upgrade dump; anything written under customer keys after it is lost. |
+
+Restore requirements, whatever the case:
+
+- **Same `LOCAL_KEK`.** Legacy rows, document envelopes on `LOCAL_KEK`, and the wrapped backup key are unreadable with any other value. Never change it to try to read old rows.
+- **Same `BETTER_AUTH_SECRET`.** Otherwise every session and verification link is invalid and everyone signs in again.
+- **Customer keys.** Owners need the key that was active when the dump or archive was taken.
+- **Matching objects.** A database restored without its objects shows documents whose bytes are missing; objects newer than the restored rows are unreferenced, and `reconcile-storage` deletes unreferenced objects older than 24 hours. Restore the bucket copy first, or pause Inngest until it is in place.
+- **Same release for `.rvbak` archives.** `npm run backup:restore` migrates the target to the checkout's schema and then copies only columns that exist there, reporting `skippedTables` and `droppedColumns`. Restore with the release that took the archive; non-zero `droppedColumns` means a newer archive went into an older schema and must not be used.
+- **Drain the outbox** with `npm run outbox -- stats` before moving to a release that cannot read the queued events (see [background events](#background-events-outbox)).
+
+After a rollback, confirm `/api/health` reports `ok`, an owner can unlock and open a sample of records, and the outbox drains.
 
 ## Deletion and erasure
 

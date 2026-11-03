@@ -248,3 +248,17 @@ jobs:
       - run: node --check index.mjs
       - name: Protocol tests against a mock REST server
         run: npm test
+
+  compose-proof:
+    name: Production Compose install proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Fresh install -> verified owner -> customer-key enrolment -> restart ->
+      # scanner, email, jobs, migration, and database failures, on the
+      # runner's own Docker. Secrets are generated per run and never printed.
+      - name: Run the proof
+        run: scripts/compose-proof.sh --context default --project "rv-proof-${{ github.run_id }}"
