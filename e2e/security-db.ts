@@ -78,8 +78,8 @@ export async function requestFields(requestId: string) {
 }
 
 export async function requestRow(requestId: string) {
-  const [row] = await query<{ status: string; title: string; jd_document_id: string | null }>(
-    `select status, title, jd_document_id from requests where id = $1`,
+  const [row] = await query<{ status: string; title: string; jd_document_id: string | null; nda_document_id: string | null }>(
+    `select status, title, jd_document_id, nda_document_id from requests where id = $1`,
     [requestId],
   );
   return row;
@@ -164,6 +164,31 @@ export async function waitForCleanScan(table: "documents" | "wallet_documents", 
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`${table} row was not scanned in time.`);
+}
+
+export async function invitationRevoked(id: string) {
+  const [row] = await query<{ revoked_at: Date | null }>(`select revoked_at from org_invitations where id = $1`, [id]);
+  return row?.revoked_at ?? null;
+}
+
+export async function invitationCount(orgId: string, email: string) {
+  const [row] = await query<{ n: string }>(
+    `select count(*)::text as n from org_invitations where org_id = $1 and email = $2`,
+    [orgId, email],
+  );
+  return Number(row.n);
+}
+
+export async function memberCount(orgId: string) {
+  const [row] = await query<{ n: string }>(`select count(*)::text as n from memberships where org_id = $1`, [orgId]);
+  return Number(row.n);
+}
+
+export async function accountTypes(emails: string[]) {
+  return query<{ email: string; account_type: string }>(
+    `select email, account_type from "user" where email = any($1) order by email`,
+    [emails],
+  );
 }
 
 export async function walletDocumentIds(email: string) {

@@ -92,7 +92,7 @@ export function loadActionRefs(distDir = process.env.NEXT_DIST_DIR ?? ".next-e2e
 // ---------------------------------------------------------------------------
 
 export type FieldValue = string | { name: string; mimeType: string; buffer: Buffer };
-export type ActionArgs = { form: Record<string, FieldValue | FieldValue[]> } | { args: unknown[] };
+export type ActionArgs = { form: Record<string, FieldValue | readonly FieldValue[]> } | { args: unknown[] };
 
 export interface ActionOutcome {
   status: number;
