@@ -13,7 +13,8 @@ vi.mock("next/cache", () => ({ revalidatePath: () => {}, revalidateTag: () => {}
 /**
  * #27/#32: the createRequest Server Action stores the JD as ciphertext and
  * commits it with the request. If the transaction fails, the JD's key is
- * shredded and its object queued for durable deletion.
+ * shredded and its object queued for durable deletion. An NDA follows the
+ * same path and is validated before either file is encrypted.
  */
 
 const TOKEN = "bt-" + "5e".repeat(24);
@@ -98,5 +99,32 @@ describe("createRequest JD upload", () => {
 
     await deletion.processDeletionTasks();
     expect(await store.keys(added[0])).toHaveLength(0);
+  });
+});
+
+describe("createRequest NDA upload", () => {
+  it("commits the encrypted NDA alongside the JD", async () => {
+    const data = roleForm("Role N", "JD-WITH-NDA");
+    data.set("nda", new File([new Uint8Array(samplePdf("NDA-OK-MARKER"))], "nda.pdf", { type: "application/pdf" }));
+    data.set("ndaViewMode", "allow_download");
+    const result = await asBrowser(owner, () => requestActions.createRequest(data));
+    expect(result.ok).toBe(true);
+    const [request] = await db.select().from(requests).where(eq(requests.id, result.id!));
+    expect(request.ndaViewMode).toBe("allow_download");
+    const [nda] = await db.select().from(documents).where(eq(documents.id, request.ndaDocumentId!));
+    expect(nda.kind).toBe("nda");
+    expect(nda.id).not.toBe(request.jdDocumentId);
+    expect((await store.getRaw(nda.storageKey)).includes(Buffer.from("NDA-OK-MARKER"))).toBe(false);
+  });
+
+  it("rejects an unsupported NDA before encrypting either file", async () => {
+    const keysBefore = (await db.select().from(dataKeys)).length;
+    const objectsBefore = (await store.keys("org/")).length;
+    const data = roleForm("Role X", "JD-REJECTED");
+    data.set("nda", new File([new TextEncoder().encode("plain text, not a document")], "nda.txt"));
+    const result = await asBrowser(owner, () => requestActions.createRequest(data));
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/NDA must be a PDF or Word/) });
+    expect((await db.select().from(dataKeys)).length).toBe(keysBefore);
+    expect((await store.keys("org/")).length).toBe(objectsBefore);
   });
 });

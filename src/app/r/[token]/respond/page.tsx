@@ -114,6 +114,9 @@ export default async function RespondPage({
   const jd = request.jdDocumentId
     ? (await db.select().from(documents).where(eq(documents.id, request.jdDocumentId)))[0]
     : null;
+  const nda = request.ndaDocumentId
+    ? (await db.select().from(documents).where(eq(documents.id, request.ndaDocumentId)))[0]
+    : undefined;
 
   const watermark = `${at.recipientEmail} · ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
 
@@ -305,7 +308,22 @@ export default async function RespondPage({
             {request.ndaDocumentId && (
               <label className="flex items-start gap-2 text-sm">
                 <input type="checkbox" name="nda" required className="mt-0.5" />
-                <span>I accept the non-disclosure agreement.</span>
+                <span>
+                  I have read and accept the{" "}
+                  {nda && nda.scanStatus === "clean" ? (
+                    <a
+                      className="underline"
+                      href={`/api/documents/${nda.id}/view`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      non-disclosure agreement
+                    </a>
+                  ) : (
+                    "non-disclosure agreement"
+                  )}
+                  .
+                </span>
               </label>
             )}
             <Button type="submit" size="lg" className="w-full">

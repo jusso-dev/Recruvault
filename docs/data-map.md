@@ -45,7 +45,7 @@ Deleting one wallet document shreds its key, queues its object, and deletes the 
 
 Responses sent through a secure link without signing in are organisation records. They follow the organisation's retention policy and are not reached by a job seeker's account deletion.
 
-Recruiter JDs and NDAs (`documents` with kind `jd`/`nda`) belong to the organisation. Replacing a JD through the API shreds the old document's key and queues its object in the same transaction.
+Recruiter JDs and NDAs (`documents` with kind `jd`/`nda`) belong to the organisation. Replacing a JD or NDA through the API (`POST /api/v1/requests/{id}/jd` or `/nda`) shreds the old document's key and queues its object in the same transaction. Responders must accept a role's NDA before submitting; acceptance is stored as an `nda` consent row with the application.
 
 ### Retention policy
 

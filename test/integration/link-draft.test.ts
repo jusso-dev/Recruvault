@@ -1,7 +1,7 @@
 import { randomBytes } from "crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { accessTokens, dataKeys, requestFields, submissions, submissionValues, vaultKeys } from "@/db/schema";
+import { accessTokens, consents, dataKeys, requestFields, requests, submissions, submissionValues, vaultKeys } from "@/db/schema";
 import { setupMigratedDatabase } from "./harness";
 import { createOrgWithVault, createRequestWithLink } from "./fixtures";
 import { asBrowser, newBrowser, type Browser } from "./request-context";
@@ -214,5 +214,27 @@ describe("draft restore", () => {
     expect(await isShredded(dekId)).toBe(true);
     const rows = await db.select().from(submissions).where(eq(submissions.accessTokenId, l.accessTokenId));
     expect(rows.map((row) => row.status)).toEqual(["received"]);
+  });
+
+  it("requires and records NDA acceptance when the role has an NDA", async () => {
+    const org = await createOrgWithVault(db);
+    const l = await createRequestWithLink(db, org);
+    await db.update(requestFields).set({ required: false }).where(eq(requestFields.id, l.fieldId));
+    await db.update(requests).set({ ndaDocumentId: crypto.randomUUID() }).where(eq(requests.id, l.requestId));
+    await db.update(accessTokens).set({ verifiedAt: new Date() }).where(eq(accessTokens.id, l.accessTokenId));
+    const browser = await responder(l.accessTokenId);
+
+    const withoutNda = draft(l.textFieldId, "answer");
+    withoutNda.set("consent", "on");
+    const refused = await asBrowser(browser, () => link.submitResponse(withoutNda));
+    expect(refused).toEqual({ ok: false, error: expect.stringMatching(/accept the NDA/) });
+
+    const accepted = draft(l.textFieldId, "answer");
+    accepted.set("consent", "on");
+    accepted.set("nda", "on");
+    expect((await asBrowser(browser, () => link.submitResponse(accepted))).ok).toBe(true);
+    const [submission] = await db.select().from(submissions).where(eq(submissions.accessTokenId, l.accessTokenId));
+    const recorded = await db.select().from(consents).where(eq(consents.submissionId, submission.id));
+    expect(recorded.map((row) => row.type).sort()).toEqual(["collection", "nda"]);
   });
 });

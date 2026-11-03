@@ -107,69 +107,90 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
     return { ok: false, error: "Select at least one field to request." };
   }
 
-  // Optional JD upload, stored encrypted and scanned before it can be viewed.
-  let jdDocumentId: string | null = null;
-  let jdUpload:
-    | { storageKey: string; ciphertext: Buffer; dekId: string; row: typeof documents.$inferInsert & { id: string } }
-    | undefined;
-  const jd = formData.get("jd");
-  if (jd instanceof File && jd.size > 0) {
-    if (jd.size > UPLOAD_MAX_BYTES) return { ok: false, error: "JD exceeds 15 MB." };
-    const bytes = Buffer.from(await jd.arrayBuffer());
+  const ndaViewMode =
+    formData.get("ndaViewMode") === "allow_download" ? "allow_download" : "view_only";
+
+  // Optional JD and NDA uploads, stored encrypted and scanned before they can
+  // be viewed. Both files are validated before either is encrypted, so a
+  // rejected NDA cannot leave an orphaned JD key behind.
+  type PreparedUpload = {
+    storageKey: string;
+    ciphertext: Buffer;
+    dekId: string;
+    row: typeof documents.$inferInsert & { id: string };
+  };
+  const files: { kind: "jd" | "nda"; label: string; file: File; bytes: Buffer; sniffed: string }[] = [];
+  for (const [kind, label] of [["jd", "JD"], ["nda", "NDA"]] as const) {
+    const file = formData.get(kind);
+    if (!(file instanceof File) || file.size === 0) continue;
+    if (file.size > UPLOAD_MAX_BYTES) return { ok: false, error: `${label} exceeds 15 MB.` };
+    const bytes = Buffer.from(await file.arrayBuffer());
     const sniffed = sniffContentType(bytes);
     if (!sniffed || !JD_ALLOWED_TYPES.includes(sniffed)) {
-      return { ok: false, error: "The JD must be a PDF or Word (.docx) document." };
+      return { ok: false, error: `The ${label} must be a PDF or Word (.docx) document.` };
     }
+    files.push({ kind, label, file, bytes, sniffed });
+  }
+  const uploads: PreparedUpload[] = [];
+  let jdDocumentId: string | null = null;
+  let ndaDocumentId: string | null = null;
+  if (files.length > 0) {
     const crk = await readUnlockedCustomerKey("organisation", ctx.orgId);
     const vault = await activeVault("organisation", ctx.orgId);
     if (!crk || !vault) return { ok: false, error: "Unlock the organisation encryption key before uploading." };
-    const prepared = await protectDocument({
-      executor: db,
-      bytes,
-      ownerType: "organisation",
-      ownerId: ctx.orgId,
-      purpose: "jd",
-      keyVersion: vault.version,
-      crk,
-      scope: "org",
-    });
-    if (!prepared.ok) return prepared;
-    jdUpload = {
-      storageKey: prepared.storageKey,
-      ciphertext: prepared.ciphertext,
-      dekId: prepared.dekId,
-      row: {
-        id: prepared.documentId,
-        orgId: ctx.orgId,
-        kind: "jd",
-        fileName: jd.name,
-        contentType: "application/octet-stream",
-        originalContentType: sniffed,
-        sizeBytes: jd.size,
+    for (const { kind, file, bytes, sniffed } of files) {
+      const prepared = await protectDocument({
+        executor: db,
+        bytes,
+        ownerType: "organisation",
+        ownerId: ctx.orgId,
+        purpose: kind,
+        keyVersion: vault.version,
+        crk,
+        scope: "org",
+      });
+      if (!prepared.ok) {
+        await discardProtectedUploads(uploads, ctx.orgId);
+        return prepared;
+      }
+      uploads.push({
         storageKey: prepared.storageKey,
-        checksum: createHash("sha256").update(bytes).digest("hex"),
+        ciphertext: prepared.ciphertext,
         dekId: prepared.dekId,
-        envelopeVersion: prepared.envelopeVersion,
-        scanStatus: "clean",
-      },
-    };
-    jdDocumentId = prepared.documentId;
+        row: {
+          id: prepared.documentId,
+          orgId: ctx.orgId,
+          kind,
+          fileName: file.name,
+          contentType: "application/octet-stream",
+          originalContentType: sniffed,
+          sizeBytes: file.size,
+          storageKey: prepared.storageKey,
+          checksum: createHash("sha256").update(bytes).digest("hex"),
+          dekId: prepared.dekId,
+          envelopeVersion: prepared.envelopeVersion,
+          scanStatus: "clean",
+        },
+      });
+      if (kind === "jd") jdDocumentId = prepared.documentId;
+      else ndaDocumentId = prepared.documentId;
+    }
   }
 
-  // The JD document, the request that points at it, and their events commit
-  // together. If the upload or the transaction fails, the JD's key is shredded
-  // and its object queued for durable deletion.
+  // The JD/NDA documents, the request that points at them, and their events
+  // commit together. If an upload or the transaction fails, their keys are
+  // shredded and their objects queued for durable deletion.
   let request: { id: string };
   try {
-    if (jdUpload) await putProtectedObject(jdUpload.storageKey, jdUpload.ciphertext);
+    for (const upload of uploads) await putProtectedObject(upload.storageKey, upload.ciphertext);
     request = await db.transaction(async (tx) => {
-      if (jdUpload) {
-        await tx.insert(documents).values(jdUpload.row);
+      for (const upload of uploads) {
+        await tx.insert(documents).values(upload.row);
         await enqueueEvent(
           tx,
           "document/uploaded",
-          { documentId: jdUpload.row.id, table: "documents" },
-          `document/uploaded:documents:${jdUpload.row.id}`,
+          { documentId: upload.row.id, table: "documents" },
+          `document/uploaded:documents:${upload.row.id}`,
           ctx.orgId,
         );
       }
@@ -194,6 +215,8 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
           consentPurpose,
           jdDocumentId,
           jdViewMode,
+          ndaDocumentId,
+          ndaViewMode,
         })
         .returning({ id: requests.id });
 
@@ -246,12 +269,7 @@ export async function createRequest(formData: FormData): Promise<ActionResult> {
       return inserted;
     });
   } catch (err) {
-    if (jdUpload) {
-      await discardProtectedUploads(
-        [{ storageKey: jdUpload.storageKey, dekId: jdUpload.dekId }],
-        ctx.orgId,
-      );
-    }
+    await discardProtectedUploads(uploads, ctx.orgId);
     throw err;
   }
 

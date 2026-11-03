@@ -12,6 +12,7 @@ const OPERATION_SCOPES: Record<string, ApiScope | null> = {
   "post /requests": "roles:write",
   "get /requests/{id}": "roles:read",
   "post /requests/{id}/jd": "jd:write",
+  "post /requests/{id}/nda": "jd:write",
   "get /requests/{id}/submissions": "submissions:read",
   "post /requests/{id}/send": "invitations:send",
   "get /reports/recruiter": "reports:read",
@@ -205,6 +206,26 @@ export function buildOpenApiSpec() {
                   type: "object",
                   properties: { jd: { type: "string", format: "binary" } },
                   required: ["jd"],
+                },
+              },
+            },
+          },
+          responses: { "200": { description: "Uploaded" }, "400": errRef(), "404": errRef() },
+        },
+      },
+      "/requests/{id}/nda": {
+        post: {
+          tags: ["Recruiter"],
+          summary: "Upload the non-disclosure agreement responders must accept (PDF or Word .docx)",
+          parameters: [idParam()],
+          requestBody: {
+            required: true,
+            content: {
+              "multipart/form-data": {
+                schema: {
+                  type: "object",
+                  properties: { nda: { type: "string", format: "binary" } },
+                  required: ["nda"],
                 },
               },
             },

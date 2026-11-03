@@ -61,6 +61,7 @@ Add to the client's MCP config:
 |------|-------|--------------|
 | `create_request` | `roles:write` | Create a role (resume + cover letter/suitability statement added by default) |
 | `upload_jd` | `jd:write` | Attach a PDF or Word JD from a local file path |
+| `upload_nda` | `jd:write` | Attach a PDF or Word NDA that responders must accept |
 | `find_candidates` | `match:read` | Match role requirements to opted-in seekers (opaque handles, no PII) |
 | `send_request` | `invitations:send` | Send the secure link to an email or a candidate handle |
 | `list_requests` | `roles:read` | List your organisation's requests |

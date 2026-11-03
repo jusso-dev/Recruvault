@@ -258,6 +258,25 @@ export default async function NewRequestPage({
                 <option value="allow_download">Allow download</option>
               </Select>
             </div>
+            <div>
+              <Label htmlFor="nda">Non-disclosure agreement (optional, PDF or Word, stored encrypted)</Label>
+              <Input
+                id="nda"
+                name="nda"
+                type="file"
+                accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              />
+              <p className="mt-1 text-xs text-stone-500">
+                Responders must open and accept it before they can submit. Acceptance is recorded with the application.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="ndaViewMode">NDA access</Label>
+              <Select id="ndaViewMode" name="ndaViewMode" defaultValue="view_only">
+                <option value="view_only">View in browser only (watermarked)</option>
+                <option value="allow_download">Allow download</option>
+              </Select>
+            </div>
           </CardContent>
         </Card>
 

@@ -143,6 +143,24 @@ tool(
 );
 
 tool(
+  "upload_nda",
+  {
+    kind: "organisation",
+    scope: "jd:write",
+    title: "Upload a non-disclosure agreement",
+    description:
+      "Attach a PDF or Word (.docx) NDA to a request from a local file path. Responders must accept it before submitting.",
+    inputSchema: { requestId: z.string(), filePath: z.string() },
+  },
+  async ({ requestId, filePath }, scope) => {
+    const bytes = await readFile(filePath);
+    const fd = new FormData();
+    fd.set("nda", new Blob([bytes]), basename(filePath));
+    return api(`/requests/${requestId}/nda`, { method: "POST", formData: fd, scope });
+  },
+);
+
+tool(
   "find_candidates",
   {
     kind: "organisation",

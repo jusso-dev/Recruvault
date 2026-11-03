@@ -53,7 +53,7 @@ export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   "reports:read": "Read recruiter reports",
   "roles:read": "List and read roles",
   "roles:write": "Create roles",
-  "jd:write": "Upload job descriptions",
+  "jd:write": "Upload job descriptions and NDAs",
   "invitations:send": "Send secure links (outbound email)",
   "submissions:read": "Export submission metadata",
   "profile:read": "Read discovery profile",
