@@ -188,6 +188,7 @@ missing_secret_refused() {
   grep -v "^$name=" "$ENV_FILE" >"$partial"
   for base in "$ROOT/docker-compose.yml" "$STUB_BASE"; do
     if out="$(unset "$name"; prod_config "$partial" "$base" 2>&1)"; then return 1; fi
+    printf '%s\n' "$out"
     printf '%s\n' "$out" | grep -q "required variable $name is missing a value" || return 1
   done
 }
@@ -227,15 +228,16 @@ jobs_backlog_visible() {
     wait_until 30 health_is "200 degraded ok ok unavailable backlog"
 }
 
-# Must fail because the database refuses the credentials, not for another reason.
+# Must fail because the database refuses the credentials, not for another
+# reason. drizzle-kit exits 1 without printing the cause; PostgreSQL logs it.
 failing_migration_exits() {
-  local bad out
+  local bad
   bad="$(hex 16)"
   echo "$bad" >>"$REDACT"
-  if out="$(dc run --rm --no-deps -e "DATABASE_URL=postgres://proof_invalid:$bad@db:5432/recruvault" migrate 2>&1)"; then
+  if dc run --rm --no-deps -e "DATABASE_URL=postgres://proof_invalid:$bad@db:5432/recruvault" migrate; then
     return 1
   fi
-  printf '%s\n' "$out" | grep -q 'password authentication failed'
+  dc logs --no-color db 2>&1 | grep -q 'password authentication failed for user "proof_invalid"'
 }
 
 # -- proof --------------------------------------------------------------------

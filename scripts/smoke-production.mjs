@@ -64,13 +64,6 @@ async function stop(proc) {
   await proc.exit;
 }
 
-/** Exits on its own within the timeout, without ever serving. */
-async function refusesToStart(proc, timeoutMs) {
-  const timer = new Promise((r) => setTimeout(r, timeoutMs, false));
-  const exited = await Promise.race([proc.exit, timer]);
-  return exited && !(await live(1_000));
-}
-
 const nonceOf = (csp) => /'nonce-([^']+)'/.exec(csp ?? "")?.[1] ?? "";
 
 function baselineHeaders(name, res, frame) {
@@ -193,7 +186,8 @@ try {
   await stop(main);
 }
 
-// Each must exit with its own validation error, not crash for another reason.
+// Each must never serve and must report its own validation error, so a crash
+// for another reason does not pass.
 for (const [name, variable, env] of [
   ["PLAYWRIGHT_TEST=1 refuses to start", "PLAYWRIGHT_TEST", { PLAYWRIGHT_TEST: "1" }],
   ["SCAN_DISABLED=true refuses to start", "SCAN_DISABLED", { SCAN_DISABLED: "true" }],
@@ -201,8 +195,8 @@ for (const [name, variable, env] of [
 ]) {
   const proc = start(env);
   try {
-    const refused = await refusesToStart(proc, 20_000);
-    check(name, refused && proc.output().includes(`${variable} must not`));
+    const neverLive = !(await live(20_000));
+    check(name, neverLive && proc.output().includes(`${variable}: ${variable} must not`));
   } finally {
     await stop(proc);
   }
