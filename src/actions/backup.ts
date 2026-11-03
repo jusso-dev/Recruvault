@@ -6,11 +6,17 @@ import { audit } from "@/lib/audit";
 import { validateBackupForm } from "@/lib/backup-crypto";
 import { getPublicBackupConfig, runBackup, saveBackupConfig } from "@/lib/backup";
 import { sanitizeForTelemetry } from "@/lib/redact";
+import { platformOrganisationId } from "@/lib/platform-bootstrap";
 import type { ActionResult } from "@/actions/org";
 
 async function owner() {
   const ctx = await requireUnlockedOrg("org:manage");
   if (ctx.role !== "owner") return { ok: false as const, error: "Only an organisation owner can configure backups." };
+  // A backup is a dump of every tenant, so another organisation's owner must
+  // not choose its destination or receive its key.
+  if (ctx.orgId !== (await platformOrganisationId())) {
+    return { ok: false as const, error: "Backups are managed by the platform organisation's owner." };
+  }
   return { ok: true as const, ctx };
 }
 

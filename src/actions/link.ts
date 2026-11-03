@@ -640,6 +640,10 @@ export async function saveDraft(formData: FormData): Promise<ActionResult> {
 
 /** Decrypted structured values of the saved draft for a link, keyed by fieldId. */
 export async function loadDraftValues(accessTokenId: string): Promise<Record<string, string>> {
+  // Exported from a "use server" module, so this is a public endpoint: the id
+  // argument is attacker-chosen. Only the verified link session's own draft is
+  // returned; legacy LOCAL_KEK drafts would otherwise decrypt for anyone.
+  if ((await readLinkSession()) !== accessTokenId) return {};
   const [draft] = await db
     .select({ id: submissions.id })
     .from(submissions)

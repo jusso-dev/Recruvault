@@ -9,6 +9,7 @@ import { ActionForm } from "@/components/action-form";
 import { ApiKeysManager } from "@/components/api-keys-manager";
 import { BackupSettings } from "@/components/backup-settings";
 import { getPublicBackupConfig, listBackupRuns } from "@/lib/backup";
+import { platformOrganisationId } from "@/lib/platform-bootstrap";
 import {
   Badge,
   Button,
@@ -46,6 +47,8 @@ export default async function SettingsPage() {
     .innerJoin(user, eq(user.id, memberships.userId))
     .where(eq(memberships.orgId, ctx.orgId));
 
+  // Backup settings are platform-wide; other tenants' owners do not see them.
+  const managesBackups = ctx.role === "owner" && ctx.orgId === (await platformOrganisationId());
   const canManageApi = can(ctx.role, "api:manage");
   const keys = canManageApi
     ? await db
@@ -245,7 +248,7 @@ export default async function SettingsPage() {
         </CardContent>
       </Card>
 
-      {ctx.role === "owner" && (
+      {managesBackups && (
         <Card>
           <CardHeader>
             <CardTitle>Nightly encrypted backups</CardTitle>
