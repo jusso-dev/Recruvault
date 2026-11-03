@@ -15,7 +15,13 @@ import { getObjectBytes, deleteObject } from "@/lib/storage";
 import { scanBytes, sniffContentType } from "@/lib/scan";
 import { audit } from "@/lib/audit";
 import { findPurgeDueSubmissionIds, purgeSubmission, resumeIncompleteErasures } from "@/lib/retention";
-import { outboxStats, publishPendingOutbox, pruneOutbox, reconcileOutbox } from "@/lib/outbox";
+import {
+  outboxNeedsAttention,
+  outboxStats,
+  publishPendingOutbox,
+  pruneOutbox,
+  reconcileOutbox,
+} from "@/lib/outbox";
 import { pruneRateLimits } from "@/lib/rate-limit";
 import { notifySubmissionReceived, sendDeliveryEmail, sendDeliverySms } from "@/lib/delivery-worker";
 import { queueRequestDelivery } from "@/lib/requests-service";
@@ -389,7 +395,7 @@ export const outboxMaintenance = inngest.createFunction(
     const stats = await step.run("stats", async () => {
       const current = await outboxStats();
       const line = { ...current, reconciled, pruned, metric: "outbox_depth" };
-      if (current.dead > 0 || current.oldestPendingSeconds > 900) log.warn(line, "outbox needs attention");
+      if (outboxNeedsAttention(current)) log.warn(line, "outbox needs attention");
       else log.info(line, "outbox depth");
       return current;
     });
