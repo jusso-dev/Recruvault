@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import {
   ArrowUpRight,
   ChevronRight,
@@ -8,10 +8,11 @@ import {
   Inbox,
 } from "lucide-react";
 import { db } from "@/db";
-import { requests, submissions } from "@/db/schema";
+import { requests, submissionShares, submissions } from "@/db/schema";
 import { requireDashboardUser } from "@/lib/dashboard-auth";
 import { can } from "@/lib/rbac";
 import { Badge, ButtonLink, Card, CardContent, statusBadgeVariant } from "@/components/ui";
+import { applicationStatusLabel } from "@/lib/application-status";
 import {
   DistributionChart,
   MetricLedger,
@@ -71,6 +72,23 @@ export default async function DashboardPage() {
     .from(submissions)
     .innerJoin(requests, eq(requests.id, submissions.requestId))
     .where(eq(requests.orgId, ctx.orgId));
+
+  // Submissions shared with this user for review, newest share first.
+  const sharedWithMe = await db
+    .select({
+      submissionId: submissions.id,
+      requestId: requests.id,
+      requestTitle: requests.title,
+      status: submissions.status,
+      purgedAt: submissions.purgedAt,
+      sharedAt: submissionShares.createdAt,
+    })
+    .from(submissionShares)
+    .innerJoin(submissions, eq(submissions.id, submissionShares.submissionId))
+    .innerJoin(requests, eq(requests.id, submissions.requestId))
+    .where(and(eq(submissionShares.userId, ctx.userId), eq(requests.orgId, ctx.orgId)))
+    .orderBy(desc(submissionShares.createdAt));
+  const showShared = sharedWithMe.length > 0 || !can(ctx.role, "requests:create");
 
   const seesAll = can(ctx.role, "submissions:view_all");
   const visibleRequests = seesAll
@@ -215,6 +233,68 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
       </section>
+
+      {showShared && (
+        <section aria-labelledby="shared-heading">
+          <div className="mb-3">
+            <h2 id="shared-heading" className="text-base font-semibold text-stone-950">
+              Shared with me
+            </h2>
+            <p className="mt-0.5 text-sm text-stone-500">
+              Applications a recruiter has shared with you for review.
+            </p>
+          </div>
+          {sharedWithMe.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+                <span className="flex h-11 w-11 items-center justify-center rounded-full bg-accent-tint text-accent ring-1 ring-accent-tint-border">
+                  <Inbox className="h-5 w-5" aria-hidden />
+                </span>
+                <p className="max-w-md text-sm text-stone-500">
+                  Nothing has been shared with you yet. When a recruiter shares an application,
+                  it appears here.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="overflow-hidden">
+              <div className="divide-y divide-stone-100">
+                {sharedWithMe.map((row) => {
+                  const variant = statusBadgeVariant(row.status);
+                  return (
+                    <Link
+                      key={row.submissionId}
+                      href={`/dashboard/requests/${row.requestId}/submissions/${row.submissionId}`}
+                      className="group grid gap-3 px-5 py-4 transition-colors duration-150 hover:bg-stone-50 focus-visible:bg-stone-50 focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-accent md:grid-cols-[minmax(0,1fr)_160px_28px] md:items-center md:gap-4"
+                    >
+                      <div className="flex min-w-0 items-start gap-3 md:items-center">
+                        <span
+                          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full md:mt-0 ${DOT[variant] ?? DOT.default}`}
+                          aria-hidden
+                        />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-stone-900">{row.requestTitle}</p>
+                          <p className="tnum mt-0.5 text-xs text-stone-500">
+                            Shared {row.sharedAt.toLocaleDateString("en-AU")}
+                            {row.purgedAt ? " · data deleted" : ""}
+                          </p>
+                        </div>
+                      </div>
+                      <div>
+                        <Badge variant={variant}>{applicationStatusLabel(row.status)}</Badge>
+                      </div>
+                      <ChevronRight
+                        className="hidden h-4 w-4 text-stone-300 transition-colors group-hover:text-stone-600 md:block"
+                        aria-hidden
+                      />
+                    </Link>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+        </section>
+      )}
 
       <section id="caseload" aria-labelledby="caseload-heading">
         <div className="mb-3 flex items-end justify-between gap-4">

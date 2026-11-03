@@ -201,7 +201,15 @@ export default async function RequestDetailPage({
                         <Badge variant={statusBadgeVariant(d.status)}>{d.status}</Badge>
                       )}
                       {canRevoke && (
-                        <ActionForm action={revokeAccessToken} successMessage="Secure link revoked.">
+                        <ActionForm
+                          action={revokeAccessToken}
+                          successMessage="Secure link revoked."
+                          confirm={{
+                            title: "Revoke this secure link?",
+                            body: `The link sent to ${d.recipient} stops working straight away and cannot be restored. Send a new link if they still need to respond.`,
+                            confirmLabel: "Revoke link",
+                          }}
+                        >
                           <input type="hidden" name="accessTokenId" value={d.accessTokenId} />
                           <Button type="submit" variant="secondary" size="sm">
                             Revoke

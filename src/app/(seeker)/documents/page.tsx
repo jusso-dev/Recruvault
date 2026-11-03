@@ -83,7 +83,15 @@ function DocumentList({
                     View
                   </ButtonLink>
                 )}
-                <ActionForm action={deleteWalletDocument} successMessage="Document deleted.">
+                <ActionForm
+                  action={deleteWalletDocument}
+                  successMessage="Document deleted."
+                  confirm={{
+                    title: `Delete ${document.fileName}?`,
+                    body: "The file is crypto-shredded and removed from your career record. This cannot be undone.",
+                    confirmLabel: "Delete document",
+                  }}
+                >
                   <input type="hidden" name="id" value={document.id} />
                   <Button type="submit" variant="ghost" size="sm">Delete</Button>
                 </ActionForm>
