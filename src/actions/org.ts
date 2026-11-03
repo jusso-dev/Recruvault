@@ -4,7 +4,7 @@ import { createHash } from "crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { apiKeys, memberships, organisations, user } from "@/db/schema";
+import { apiKeys, memberships, organisations } from "@/db/schema";
 import { getSession, requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "@/lib/guards";
 import { audit } from "@/lib/audit";
 import { ASSIGNABLE_ROLES, type OrgRole } from "@/lib/rbac";
@@ -98,55 +98,6 @@ export async function createOrganisation(formData: FormData): Promise<ActionResu
 
   revalidatePath("/dashboard");
   return { ok: true, id: org.id };
-}
-
-/** Add an existing org-side user to the organisation with a role. */
-export async function addMember(formData: FormData): Promise<ActionResult> {
-  const ctx = await requireUnlockedOrg("users:manage");
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const role = String(formData.get("role") ?? "") as OrgRole;
-
-  if (!email) return { ok: false, error: "Email is required." };
-  if (!ASSIGNABLE_ROLES.includes(role)) return { ok: false, error: "Invalid role." };
-
-  const [u] = await db.select().from(user).where(eq(user.email, email));
-  if (!u) {
-    return {
-      ok: false,
-      error: "No account with that email. Ask them to sign up as an organisation user first.",
-    };
-  }
-  if ((u as { accountType?: string }).accountType !== "org") {
-    return { ok: false, error: "That account is a job seeker account, not an organisation user." };
-  }
-
-  // Single-org invariant: a user belongs to exactly one organisation. This
-  // keeps tenant resolution unambiguous (see requireOrgUser).
-  const [existingMembership] = await db
-    .select({ orgId: memberships.orgId })
-    .from(memberships)
-    .where(eq(memberships.userId, u.id));
-  if (existingMembership) {
-    return existingMembership.orgId === ctx.orgId
-      ? { ok: false, error: "Already a member." }
-      : { ok: false, error: "That account already belongs to another organisation." };
-  }
-
-  await db.insert(memberships).values({ orgId: ctx.orgId, userId: u.id, role });
-
-  const meta = await requestMeta();
-  await audit({
-    orgId: ctx.orgId,
-    actorType: "org_user",
-    actorId: ctx.userId,
-    action: "membership.added",
-    targetType: "user",
-    targetId: u.id,
-    ...meta,
-  });
-
-  revalidatePath("/dashboard/settings");
-  return { ok: true };
 }
 
 export async function updateMemberRole(formData: FormData): Promise<ActionResult> {

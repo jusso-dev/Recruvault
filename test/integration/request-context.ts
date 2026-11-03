@@ -102,6 +102,7 @@ export const emailMock = {
   },
   sendEmail: async () => null,
   sendRequestInvite: async () => null,
+  sendOrgInvitation: async () => null,
   sendOtpEmail: async () => null,
   sendSubmissionReceived: async () => null,
   sendRecruiterSubmissionAlert: async () => null,

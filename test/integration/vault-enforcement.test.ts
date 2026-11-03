@@ -90,8 +90,9 @@ describe("vault enforcement on server actions", () => {
     const submissions = await import("@/actions/submissions");
     const alerts = await import("@/actions/job-alerts");
     const backup = await import("@/actions/backup");
+    const invitations = await import("@/actions/invitations");
     const calls: [string, () => Promise<unknown>][] = [
-      ["addMember", () => org.addMember(form({ email: "x@example.invalid", role: "recruiter" }))],
+      ["inviteMember", () => invitations.inviteMember(form({ email: "x@example.invalid", role: "recruiter" }))],
       ["updateMemberRole", () => org.updateMemberRole(form({ membershipId: randomUUID(), role: "recruiter" }))],
       ["updateOrgSettings", () => org.updateOrgSettings(form({ retentionDays: "90" }))],
       ["verifyDomain", () => org.verifyDomain()],
@@ -114,8 +115,11 @@ describe("vault enforcement on server actions", () => {
     const org = await import("@/actions/org");
     const requests = await import("@/actions/requests");
     const submissions = await import("@/actions/submissions");
+    const invitations = await import("@/actions/invitations");
     const calls: [string, () => Promise<unknown>][] = [
       ["removeMember", () => org.removeMember(form({ membershipId: randomUUID() }))],
+      ["revokeInvitation", () => invitations.revokeInvitation(form({ invitationId: randomUUID() }))],
+      ["unshareSubmission", () => submissions.unshareSubmission(form({ submissionId: randomUUID(), userId: "x" }))],
       ["deleteTemplate", () => requests.deleteTemplate(form({ templateId: randomUUID() }))],
       ["revokeAccessToken", () => requests.revokeAccessToken(form({ accessTokenId: randomUUID() }))],
       ["deleteSubmission", () => submissions.deleteSubmission(form({ submissionId: randomUUID() }))],

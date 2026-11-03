@@ -20,6 +20,7 @@ import { pruneRateLimits } from "@/lib/rate-limit";
 import { notifySubmissionReceived, sendDeliveryEmail, sendDeliverySms } from "@/lib/delivery-worker";
 import { queueRequestDelivery } from "@/lib/requests-service";
 import { processDeletionTasks } from "@/lib/deletion-queue";
+import { sendInvitationEmail } from "@/lib/invitations";
 import { reconcileStorage } from "@/lib/storage-reconciler";
 import { migrateLegacyDocuments } from "@/lib/document-migration";
 import { nightlyBackupIfDue } from "@/lib/backup";
@@ -189,6 +190,16 @@ export const submissionReceived = inngest.createFunction(
   async ({ event, step }) => {
     const { submissionId } = parseEvent("submission/received", event.data);
     const outcome = await step.run("notify-recruiter", () => notifySubmissionReceived(submissionId));
+    return { outcome };
+  },
+);
+
+/** Email a teammate invitation once. The link is rebuilt inside the step and never returned. */
+export const deliverOrgInvitation = inngest.createFunction(
+  { id: "deliver-org-invitation", retries: 3, triggers: [{ event: "org-invite/send" }] },
+  async ({ event, step }) => {
+    const { invitationId } = parseEvent("org-invite/send", event.data);
+    const outcome = await step.run("send-invitation", () => sendInvitationEmail(invitationId));
     return { outcome };
   },
 );
@@ -440,6 +451,7 @@ export const functions = [
   deliverRequest,
   scanDocument,
   submissionReceived,
+  deliverOrgInvitation,
   retentionPurge,
   purgeSubmissionJob,
   expiryReminders,

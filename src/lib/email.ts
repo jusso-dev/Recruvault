@@ -166,6 +166,28 @@ export async function sendAuthEmail(c: Omit<EmailContent, "from">) {
   return sendEmail(c);
 }
 
+export async function sendOrgInvitation(opts: {
+  to: string;
+  org: OrgSender;
+  role: string;
+  inviterName: string | null;
+  link: string;
+  expiresAt: Date;
+}) {
+  const inviter = opts.inviterName ? `${safeText(opts.inviterName)} invited you` : "You have been invited";
+  return sendEmail({
+    to: opts.to,
+    from: fromAddress(opts.org),
+    subject: `Join ${opts.org.orgName} on Recruvault`,
+    heading: `Join ${safeText(opts.org.orgName)} on Recruvault`,
+    body: `${inviter} to join <strong>${safeText(opts.org.orgName)}</strong> as ${safeText(opts.role)}. Sign in or create an account with this email address to accept. The invitation works once and expires on ${opts.expiresAt.toDateString()}. You will also need the organisation's encryption key from its owner before you can open records.`,
+    ctaLabel: "Accept invitation",
+    ctaUrl: opts.link,
+    footerNote:
+      "If you did not expect this invitation, ignore this email. Links in Recruvault emails only ever point to your Recruvault domain.",
+  });
+}
+
 export async function sendRequestInvite(opts: {
   to: string;
   org: OrgSender;

@@ -94,6 +94,7 @@ export const config = {
     "/forgot-password",
     "/reset-password",
     "/r/:path*",
+    "/invite/:path*",
     "/api/v1/:path*",
   ],
 };
