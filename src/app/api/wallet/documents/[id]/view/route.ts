@@ -70,7 +70,8 @@ export async function GET(
       "Content-Disposition": `inline; filename="${safeName}"`,
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": "default-src 'none'; object-src 'none'; frame-ancestors 'self'",
+      // Opened in its own tab, never embedded, so it cannot be framed.
+      "Content-Security-Policy": "default-src 'none'; object-src 'none'; frame-ancestors 'none'",
     },
   });
 }

@@ -170,9 +170,9 @@ jobs:
           CI: "true"
 
   production-smoke:
-    name: Production smoke test
+    name: Production smoke and browser security tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
@@ -193,7 +193,18 @@ jobs:
           node-version: "22"
           cache: npm
 
+      - name: Start object store
+        run: |
+          docker run -d --name minio -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER=smoke-minio \
+            -e MINIO_ROOT_PASSWORD=smoke-minio-secret \
+            "$MINIO_IMAGE" server /data
+          timeout 60 sh -c 'until curl -sf http://127.0.0.1:9000/minio/health/live; do sleep 1; done'
+
       - run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Build
         run: npm run build
@@ -222,6 +233,32 @@ jobs:
           S3_ENDPOINT: http://127.0.0.1:9
           AWS_ACCESS_KEY_ID: smoke-access
           AWS_SECRET_ACCESS_KEY: smoke-secret-value
+          INNGEST_EVENT_KEY: smoke-event
+          INNGEST_SIGNING_KEY: signkey-prod-0123456789abcdef
+          RESEND_API_KEY: re_smoke_invalid
+          RESEND_FROM_EMAIL: vault@example.org
+
+      # Real browser against the standalone server: enforced CSP with zero
+      # violations, injected scripts blocked, framing and CORS. Traces,
+      # screenshots, and videos are off and nothing is uploaded: pages show
+      # encryption keys and session state.
+      - name: Production browser security tests
+        run: |
+          BETTER_AUTH_SECRET="$(openssl rand -hex 32)"
+          LOCAL_KEK="$(openssl rand -hex 32)"
+          BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
+          export BETTER_AUTH_SECRET LOCAL_KEK BOOTSTRAP_TOKEN
+          npx playwright test -c playwright.prod.config.ts
+        env:
+          CI: "true"
+          DATABASE_URL: postgres://smoke:smoke-only-password@127.0.0.1:5432/recruvault_smoke
+          APP_URL: https://vault.example.org
+          S3_BUCKET: recruvault-prod-e2e
+          S3_ENDPOINT: http://127.0.0.1:9000
+          S3_FORCE_PATH_STYLE: "true"
+          S3_SERVER_SIDE_ENCRYPTION: "false"
+          AWS_ACCESS_KEY_ID: smoke-minio
+          AWS_SECRET_ACCESS_KEY: smoke-minio-secret
           INNGEST_EVENT_KEY: smoke-event
           INNGEST_SIGNING_KEY: signkey-prod-0123456789abcdef
           RESEND_API_KEY: re_smoke_invalid

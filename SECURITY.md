@@ -6,6 +6,28 @@ right-to-work evidence, or police-check documents. The
 [release checklist](https://github.com/jusso-dev/Recruvault/issues/37) records
 security requirements that are still open. Customer keys are enrolled per organisation and job seeker. The server can unwrap a key while that session or API credential is unlocked. A database copy without the unlock secret does not reveal new envelopes. Legacy rows and secure-link render delegation still depend on `LOCAL_KEK`. Details and the restore procedure are in [docs/encryption.md](docs/encryption.md) and [docs/operations.md](docs/operations.md).
 
+## Browser security policy
+
+The nonce-based Content Security Policy is enforced in production from the
+start. There was no report-only phase and there is no violation-report
+endpoint: the production browser tests (`playwright.prod.config.ts`, run in
+CI's production smoke job) load the pages with the enforced policy and fail on
+any violation, so there are no reports to collect or sanitise. The policy,
+caching, document framing, and CORS rules are described in
+[docs/operations.md](docs/operations.md#browser-security-policy).
+
+Remaining allowances, owned by the maintainer (@jusso-dev):
+
+| Allowance | Why it is needed | Remove when |
+| --- | --- | --- |
+| `script-src 'strict-dynamic'` | Next.js loads route chunks from its nonced runtime. Trust passes to scripts those scripts insert; parser-inserted scripts without the nonce, including same-origin ones, stay blocked. | Next.js can load every chunk under a hash or SRI policy without dynamic insertion. |
+| `img-src data: blob:` | Kept from the Next.js reference policy for image sources that stylesheets or libraries may inline. No application code creates them today, and images cannot run script. | The production browser test covers every page (seeker pages are not yet covered) and shows none are needed. |
+| `frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN` on `/api/documents/<id>/view` only | The secure-link response page shows the job description PDF in a same-origin iframe. All other responses deny framing. | The job description is rendered without a frame (for example, a page-image viewer). |
+| Development only: `'unsafe-eval'` and `ws:` | React debugging and hot reload in `next dev`. Never sent when `NODE_ENV=production`. | Not applicable to production. |
+
+`style-src` has no `unsafe-inline` allowance. Inline style attributes are
+avoided; styles come from stylesheets or nonced style elements.
+
 ## Dependency updates
 
 Use the committed npm lockfiles for both the application and `mcp/`. Docker
