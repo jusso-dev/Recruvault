@@ -44,6 +44,8 @@ export function ActionForm({
   const [pending, startTransition] = useTransition();
   const { showToast } = useToast();
   const [error, setError] = useState<string | null>(null);
+  // Content renders only while open so closed dialogs add no hidden text.
+  const [confirming, setConfirming] = useState(false);
   const errorRef = useRef<HTMLParagraphElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pendingSubmit = useRef<{ form: HTMLFormElement; opener: HTMLElement | null } | null>(null);
@@ -99,6 +101,7 @@ export function ActionForm({
       form,
       opener: submitter instanceof HTMLElement ? submitter : (document.activeElement as HTMLElement | null),
     };
+    setConfirming(true);
     dialogRef.current?.showModal();
   }
 
@@ -106,6 +109,7 @@ export function ActionForm({
     const submit = pendingSubmit.current;
     pendingSubmit.current = null;
     dialogRef.current?.close();
+    setConfirming(false);
     if (confirmed && submit) run(submit.form);
     else submit?.opener?.focus();
   }
@@ -140,22 +144,26 @@ export function ActionForm({
           }}
           className="m-auto w-[calc(100%-2rem)] max-w-md rounded-lg border border-stone-200 bg-white p-0 text-stone-900 shadow-[0_12px_32px_rgba(41,37,36,0.14)] backdrop:bg-stone-950/40"
         >
-          <div className="space-y-2 p-5">
-            <h2 id={titleId} className="text-base font-semibold">
-              {confirm.title}
-            </h2>
-            <p id={bodyId} className="text-sm leading-6 text-stone-600">
-              {confirm.body}
-            </p>
-          </div>
-          <div className="flex justify-end gap-2 border-t border-stone-100 px-5 py-3">
-            <Button type="button" variant="secondary" autoFocus onClick={() => closeDialog(false)}>
-              Cancel
-            </Button>
-            <Button type="button" variant="destructive" onClick={() => closeDialog(true)}>
-              {confirm.confirmLabel}
-            </Button>
-          </div>
+          {confirming && (
+            <>
+              <div className="space-y-2 p-5">
+                <h2 id={titleId} className="text-base font-semibold">
+                  {confirm.title}
+                </h2>
+                <p id={bodyId} className="text-sm leading-6 text-stone-600">
+                  {confirm.body}
+                </p>
+              </div>
+              <div className="flex justify-end gap-2 border-t border-stone-100 px-5 py-3">
+                <Button type="button" variant="secondary" autoFocus onClick={() => closeDialog(false)}>
+                  Cancel
+                </Button>
+                <Button type="button" variant="destructive" onClick={() => closeDialog(true)}>
+                  {confirm.confirmLabel}
+                </Button>
+              </div>
+            </>
+          )}
         </dialog>
       )}
     </form>
