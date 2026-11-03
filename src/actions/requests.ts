@@ -16,7 +16,7 @@ import {
   suppressions,
 } from "@/db/schema";
 import { AuthError, requestMeta, requireUnlockedOrg, requireEnrolledOrg } from "@/lib/guards";
-import { assertSubmissionAccess } from "@/lib/review";
+import { assertSubmissionAccess, canManageRequest } from "@/lib/review";
 import { audit } from "@/lib/audit";
 import { enqueueEvent, publishAfterCommit } from "@/lib/outbox";
 import { queueRequestDelivery } from "@/lib/requests-service";
@@ -313,7 +313,7 @@ export async function sendRequest(formData: FormData): Promise<ActionResult> {
     .select()
     .from(requests)
     .where(and(eq(requests.id, requestId), eq(requests.orgId, ctx.orgId)));
-  if (!request) return { ok: false, error: "Request not found." };
+  if (!request || !canManageRequest(ctx, request)) return { ok: false, error: "Request not found." };
   if (request.status !== "open" && request.status !== "closing_soon") {
     return { ok: false, error: "Only open requests can be sent." };
   }
@@ -352,11 +352,17 @@ export async function revokeAccessToken(formData: FormData): Promise<ActionResul
   const accessTokenId = String(formData.get("accessTokenId") ?? "");
 
   const [row] = await db
-    .select({ id: accessTokens.id, consumedAt: accessTokens.consumedAt, revokedAt: accessTokens.revokedAt, requestId: accessTokens.requestId })
+    .select({
+      id: accessTokens.id,
+      consumedAt: accessTokens.consumedAt,
+      revokedAt: accessTokens.revokedAt,
+      requestId: accessTokens.requestId,
+      createdBy: requests.createdBy,
+    })
     .from(accessTokens)
     .innerJoin(requests, eq(requests.id, accessTokens.requestId))
     .where(and(eq(accessTokens.id, accessTokenId), eq(requests.orgId, ctx.orgId)));
-  if (!row) return { ok: false, error: "Link not found." };
+  if (!row || !canManageRequest(ctx, row)) return { ok: false, error: "Link not found." };
   if (row.consumedAt) return { ok: false, error: "This link has already been completed." };
   if (row.revokedAt) return { ok: false, error: "This link is already revoked." };
 
@@ -396,7 +402,7 @@ export async function setRequestStatus(formData: FormData): Promise<ActionResult
     .select()
     .from(requests)
     .where(and(eq(requests.id, requestId), eq(requests.orgId, ctx.orgId)));
-  if (!request) return { ok: false, error: "Request not found." };
+  if (!request || !canManageRequest(ctx, request)) return { ok: false, error: "Request not found." };
 
   await db
     .update(requests)

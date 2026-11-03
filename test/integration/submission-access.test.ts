@@ -285,3 +285,22 @@ describe("setRequestStatus", () => {
     }
   });
 });
+
+describe("request management", () => {
+  it("is limited to the request's recruiter and view-all roles", async () => {
+    const requestId = requestA.requestId;
+    const denied = await asBrowser(recruiterB.browser, async () => [
+      await requestActions.setRequestStatus(form({ requestId, status: "archived" })),
+      await requestActions.sendRequest(form({ requestId, recipientEmail: "someone@example.invalid" })),
+      await requestActions.revokeAccessToken(form({ accessTokenId: requestA.accessTokenId })),
+    ]);
+    for (const result of denied) expect(result).toEqual({ ok: false, error: expect.stringMatching(/not found/) });
+    const [unchanged] = await db.select().from(requests).where(eq(requests.id, requestId));
+    expect(unchanged.status).not.toBe("archived");
+
+    const allowed = await asBrowser(owner.browser, () =>
+      requestActions.setRequestStatus(form({ requestId, status: unchanged.status })),
+    );
+    expect(allowed.ok).toBe(true);
+  });
+});

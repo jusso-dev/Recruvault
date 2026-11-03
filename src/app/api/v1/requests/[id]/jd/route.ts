@@ -14,6 +14,7 @@ import { activeVault } from "@/lib/vault-store";
 import { discardProtectedUploads, protectDocument, putProtectedObject } from "@/lib/document-protect";
 import { audit } from "@/lib/audit";
 import { AuthError } from "@/lib/guards";
+import { canManageRequest } from "@/lib/review";
 
 /** Upload (or replace) a request's job description. Accepts PDF or Word (.docx). */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -22,10 +23,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const { id } = await params;
 
     const [request] = await db
-      .select({ id: requests.id })
+      .select({ id: requests.id, createdBy: requests.createdBy })
       .from(requests)
       .where(and(eq(requests.id, id), eq(requests.orgId, ctx.orgId)));
-    if (!request) throw new ApiError(404, "Request not found.");
+    if (!request || !canManageRequest(ctx, request)) throw new ApiError(404, "Request not found.");
 
     const form = await req.formData().catch(() => {
       throw new ApiError(400, "Expected multipart/form-data with a 'jd' file.");

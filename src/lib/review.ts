@@ -33,6 +33,18 @@ export interface SubmissionDocumentRef {
 }
 
 /**
+ * Recruiters (view_own) manage only the requests they created; roles with
+ * org-wide submission access manage every request in the organisation. The
+ * dashboard request page applies the same rule.
+ */
+export function canManageRequest(
+  ctx: Pick<OrgContext, "role" | "userId">,
+  request: { createdBy: string | null },
+): boolean {
+  return can(ctx.role, "submissions:view_all") || request.createdBy === ctx.userId;
+}
+
+/**
  * Load a submission for review with tenant + role checks applied in the data
  * layer. Recruiters see their own/team requests; reviewers only submissions
  * explicitly shared with them; admins/owners/compliance see all (org-scoped).

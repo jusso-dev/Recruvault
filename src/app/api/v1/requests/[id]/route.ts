@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { requestFields, requests } from "@/db/schema";
 import { resolveOrgContext } from "@/lib/api-auth";
 import { ApiError, handle, json } from "@/lib/api/http";
+import { can } from "@/lib/rbac";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
@@ -28,7 +29,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         createdAt: requests.createdAt,
       })
       .from(requests)
-      .where(and(eq(requests.id, id), eq(requests.orgId, ctx.orgId)));
+      .where(
+        and(
+          eq(requests.id, id),
+          eq(requests.orgId, ctx.orgId),
+          // Recruiters see only their own requests, as on the dashboard.
+          can(ctx.role, "submissions:view_all") ? undefined : eq(requests.createdBy, ctx.userId),
+        ),
+      );
     if (!request) throw new ApiError(404, "Request not found.");
 
     const fields = await db

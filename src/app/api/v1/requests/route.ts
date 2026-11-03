@@ -1,10 +1,11 @@
 import { NextRequest } from "next/server";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { requests } from "@/db/schema";
 import { resolveOrgContext } from "@/lib/api-auth";
 import { ApiError, handle, json } from "@/lib/api/http";
 import { createRequestCore } from "@/lib/requests-service";
+import { can } from "@/lib/rbac";
 
 export async function GET(req: NextRequest) {
   return handle(async () => {
@@ -26,7 +27,11 @@ export async function GET(req: NextRequest) {
         createdAt: requests.createdAt,
       })
       .from(requests)
-      .where(eq(requests.orgId, ctx.orgId))
+      .where(
+        can(ctx.role, "submissions:view_all")
+          ? eq(requests.orgId, ctx.orgId)
+          : and(eq(requests.orgId, ctx.orgId), eq(requests.createdBy, ctx.userId)),
+      )
       .orderBy(desc(requests.createdAt));
     return json({ requests: rows });
   });

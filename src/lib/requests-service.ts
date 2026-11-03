@@ -22,6 +22,7 @@ import {
   ROLE_REQUEST_FIELD_KEYS,
 } from "@/lib/fields";
 import { ApiError } from "@/lib/api/http";
+import { canManageRequest } from "@/lib/review";
 import {
   EMPLOYMENT_TYPES,
   SALARY_PERIODS,
@@ -185,7 +186,7 @@ export async function sendRequestCore(
     .select()
     .from(requests)
     .where(and(eq(requests.id, requestId), eq(requests.orgId, ctx.orgId)));
-  if (!request) throw new ApiError(404, "Request not found.");
+  if (!request || !canManageRequest(ctx, request)) throw new ApiError(404, "Request not found.");
   if (request.status !== "open" && request.status !== "closing_soon") {
     throw new ApiError(409, "Only open requests can be sent.");
   }
