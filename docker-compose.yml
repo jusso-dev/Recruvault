@@ -62,7 +62,7 @@ services:
     restart: "no"
 
   db:
-    image: postgres:17.12-alpine@sha256:34261f594522cf41dfcb76aefd42b9d201098b0e6b23c9c68733f169e4218b6f
+    image: postgres:18.0-alpine@sha256:48c8ad3a7284b82be4482a52076d47d879fd6fb084a1cbfccbd551f9331b0e40
     environment:
       POSTGRES_USER: recruvault
       POSTGRES_PASSWORD: recruvault
