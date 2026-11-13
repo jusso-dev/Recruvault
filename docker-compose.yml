@@ -137,7 +137,7 @@ services:
   # reminders, retention purge). For production, use Inngest Cloud instead
   # and remove this service.
   inngest:
-    image: inngest/inngest:v1.46.0@sha256:9c4a2413bdbfa31a94ff54c32ae2dcc6613dbee84bc76db6cf6644d19e357e3e
+    image: inngest/inngest:v1.51.0@sha256:fcf9305f2e7ffbcfaba54e6a25104ca4860b91d24d3713563350769a2d4c625a
     command: inngest dev -u http://app:3000/api/inngest --no-discovery
     ports:
       - "127.0.0.1:8288:8288"
