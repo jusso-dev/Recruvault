@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  POSTGRES_IMAGE: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+  POSTGRES_IMAGE: postgres:17.12-alpine@sha256:34261f594522cf41dfcb76aefd42b9d201098b0e6b23c9c68733f169e4218b6f
   MINIO_IMAGE: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
   MC_IMAGE: pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
 
@@ -74,7 +74,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        image: postgres:17.12-alpine@sha256:34261f594522cf41dfcb76aefd42b9d201098b0e6b23c9c68733f169e4218b6f
         env:
           POSTGRES_USER: it
           POSTGRES_PASSWORD: it-only
@@ -116,7 +116,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        image: postgres:17.12-alpine@sha256:34261f594522cf41dfcb76aefd42b9d201098b0e6b23c9c68733f169e4218b6f
         env:
           POSTGRES_USER: recruvault
           POSTGRES_PASSWORD: e2e-only
@@ -177,7 +177,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        image: postgres:17.12-alpine@sha256:34261f594522cf41dfcb76aefd42b9d201098b0e6b23c9c68733f169e4218b6f
         env:
           POSTGRES_USER: smoke
           POSTGRES_PASSWORD: smoke-only-password
