@@ -78,7 +78,7 @@ services:
       retries: 10
 
   clamav:
-    image: clamav/clamav:1.5.4@sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6
+    image: clamav/clamav:1.5.4@sha256:7054e3f34308c384ea43cd786ea17abf899bd44af40af9f1b099853d7a5c214e
     volumes:
       - clamav-data:/var/lib/clamav
     healthcheck:
